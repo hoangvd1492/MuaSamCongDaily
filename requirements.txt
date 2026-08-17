@@ -1,0 +1,25 @@
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Environment & Config
+python-dotenv>=1.0.0
+
+# Google Drive API & Authentication
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+
+# HTTP & Web Scraping / Automation
+curl_cffi==0.13.0
+playwright>=1.40.0
+playwright-stealth>=1.0.6
+aiohttp>=3.9.0
+
+# Excel & Data Processing
+openpyxl>=3.1.0
+pandas>=2.1.0
+
+# Background Scheduler & Timezone
+APScheduler>=3.10.4
+pytz>=2024.1

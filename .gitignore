@@ -1,0 +1,35 @@
+# Môi trường ảo (Virtual Environment)
+.venv/
+venv/
+ENV/
+env/
+
+# Tệp bảo mật & biến môi trường
+.env
+*.env
+*.json
+!requirements.json
+# Giữ lại file JSON cấu hình nếu cần, loại trừ service account key:
+# mscidsc-*.json
+
+# Dữ liệu thu thập & Logs
+crawl_data/
+data/
+logs/
+*.log
+
+# Cache & file sinh tự động của Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Hệ điều hành
+.DS_Store
+Thumbs.db
