@@ -609,8 +609,7 @@ async def send_telegram(
 async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # 1. Trả lời query ngay lập tức để tắt xoay vòng trên nút bấm
-    # CHỈ GỌI MỘT LẦN DUY NHẤT Ở ĐÂY
+    # 1. Trả lời query ngay lập tức để tắt hiệu ứng xoay tròn trên nút bấm
     try:
         await query.answer()
     except TelegramError:
@@ -621,23 +620,22 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # 2. Tách dữ liệu từ chuỗi: "download_hsmt:id:ma_tbmt"
-    # parts sẽ là ["download_hsmt", "id_của_bạn", "mã_tbmt_của_bạn"]
     parts = callback_data.split(":")
-    
     if len(parts) != 3:
-        return # Format không đúng, thoát
+        return
 
     _, item_id, ma_tbmt = parts
     chat_id = query.message.chat_id
-    
-    
+
+    # Kiểm tra tính hợp lệ
     if not is_tbmt_valid(item_id=item_id, ma_tbmt=ma_tbmt):
         await query.message.reply_text(
-            f"❌ Thông tin gói thầu không hợp lệ hoặc không tồn tại trong hệ thống!",
+            "❌ Thông tin gói thầu không hợp lệ hoặc không tồn tại trong hệ thống!",
             parse_mode="HTML",
         )
         return
-    
+
+    # Nếu file đã có sẵn trong cache/storage -> Gửi ngay lập tức
     existing_file = get_existing_hsmt_file(ma_tbmt)
     if existing_file:
         with open(existing_file, "rb") as f:
@@ -649,28 +647,27 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         return
 
-    # 3. Kiểm tra xem task đã có trong hàng đợi chưa
-    if is_task_pending(item_id):
-        # KHÔNG GỌI query.answer() ở đây nữa
-        await query.message.reply_text(
-            f"⏳ Yêu cầu cho mã <b>{ma_tbmt}</b> đã được thêm vào hàng đợi trước đó!",
-            parse_mode="HTML"
-        )
-        return
+    # 3. Kiểm tra trạng thái hàng đợi và thêm vào danh sách chờ
+    already_pending = is_task_pending(item_id)
 
-    # 4. Thêm task với đầy đủ id và ma_tbmt vào hàng đợi
+    # Thêm task / thêm chat_id vào hàng chờ nhận file
     await add_download_task(
-        id=item_id,           # Đã bổ sung id vào đây
-        ma_tbmt=ma_tbmt,      # Truyền thêm ma_tbmt
+        id=item_id,
+        ma_tbmt=ma_tbmt,
         chat_id=chat_id,
-        message_id=query.message.message_id,
     )
 
-    # 5. Thông báo cho người dùng
-    await query.message.reply_text(
-        f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
-        parse_mode="HTML",
-    )
+    # 4. Phản hồi thông báo phù hợp cho người dùng
+    if already_pending:
+        await query.message.reply_text(
+            f"⏳ Gói <b>{ma_tbmt}</b> đang trong tiến trình tải. Bot sẽ tự động gửi file cho bạn ngay khi hoàn tất!",
+            parse_mode="HTML",
+        )
+    else:
+        await query.message.reply_text(
+            f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
+            parse_mode="HTML",
+        )
 # ==========================================================
 # SETUP BOT
 # ==========================================================
