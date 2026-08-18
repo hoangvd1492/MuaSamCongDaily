@@ -7,23 +7,23 @@ from curl_cffi.curl import CurlMime
 
 import io
 
-from telegram import Update
+from telegram import InputMediaDocument, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    CallbackQueryHandler
 )
 
-from telegram.error import TelegramError
-import asyncio
 
 
 from src.worker.worker import (
     is_task_pending,
     add_download_task,
-    get_existing_hsmt_file
+    get_existing_hsmt_file,
+    get_existing_baocao_file
 )
 
 from src.database.db import (
@@ -609,7 +609,7 @@ async def send_telegram(
 async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # 1. Trả lời query ngay lập tức để tắt hiệu ứng xoay tròn trên nút bấm
+    # 1. Tắt hiệu ứng quay tròn trên nút bấm
     try:
         await query.answer()
     except TelegramError:
@@ -619,7 +619,7 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     if not callback_data or not callback_data.startswith("download_hsmt:"):
         return
 
-    # 2. Tách dữ liệu từ chuỗi: "download_hsmt:id:ma_tbmt"
+    # 2. Tách dữ liệu: "download_hsmt:id:ma_tbmt"
     parts = callback_data.split(":")
     if len(parts) != 3:
         return
@@ -627,45 +627,49 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     _, item_id, ma_tbmt = parts
     chat_id = query.message.chat_id
 
-    # Kiểm tra tính hợp lệ
     if not is_tbmt_valid(item_id=item_id, ma_tbmt=ma_tbmt):
-        await query.message.reply_text(
-            "❌ Thông tin gói thầu không hợp lệ hoặc không tồn tại trong hệ thống!",
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Thông tin gói thầu không hợp lệ hoặc không tồn tại trong hệ thống!",
             parse_mode="HTML",
         )
         return
 
-    # Nếu file đã có sẵn trong cache/storage -> Gửi ngay lập tức
-    existing_file = get_existing_hsmt_file(ma_tbmt)
-    if existing_file:
-        with open(existing_file, "rb") as f:
-            await query.message.reply_document(
-                document=f,
-                filename=f"HSMT_{ma_tbmt}.pdf",
-                caption=f"✅ HSMT cho gói <b>{ma_tbmt}</b>!",
-                parse_mode="HTML",
-            )
+    existing_pdf = get_existing_hsmt_file(ma_tbmt)
+    existing_docx = get_existing_baocao_file(ma_tbmt)
+
+    # TRƯỜNG HỢP 1: ĐÃ CÓ ĐỦ CẢ 2 FILE CACHE -> GỬI NGAY
+    if existing_pdf and existing_docx:
+        with open(existing_pdf, "rb") as f_pdf, open(existing_docx, "rb") as f_docx:
+            media_group = [
+                InputMediaDocument(
+                    media=f_pdf,
+                    filename=f"HSMT_{ma_tbmt}.pdf",
+                ),
+                InputMediaDocument(
+                    media=f_docx,
+                    filename=f"BaoCao_{ma_tbmt}.docx",
+                    caption=f"✅ HSMT & Tóm tắt cho gói <b>{ma_tbmt}</b>!",
+                    parse_mode="HTML",
+                ),
+            ]
+            await context.bot.send_media_group(chat_id=chat_id, media=media_group)
         return
 
-    # 3. Kiểm tra trạng thái hàng đợi và thêm vào danh sách chờ
     already_pending = is_task_pending(item_id)
+    await add_download_task(id=item_id, ma_tbmt=ma_tbmt, chat_id=chat_id)
 
-    # Thêm task / thêm chat_id vào hàng chờ nhận file
-    await add_download_task(
-        id=item_id,
-        ma_tbmt=ma_tbmt,
-        chat_id=chat_id,
-    )
-
-    # 4. Phản hồi thông báo phù hợp cho người dùng
+    # 4. PHẢN HỒI THÔNG BÁO CHO NGƯỜI DÙNG
     if already_pending:
-        await query.message.reply_text(
-            f"⏳ Gói <b>{ma_tbmt}</b> đang trong tiến trình tải. Bot sẽ tự động gửi file cho bạn ngay khi hoàn tất!",
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ Gói <b>{ma_tbmt}</b> đang trong hàng đợi. Bot sẽ gửi file cho bạn ngay khi hoàn tất!",
             parse_mode="HTML",
         )
     else:
-        await query.message.reply_text(
-            f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📥 Đã thêm yêu cầu tải HSMT & tạo báo cáo <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
             parse_mode="HTML",
         )
 # ==========================================================
