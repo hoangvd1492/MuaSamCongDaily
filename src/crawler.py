@@ -239,13 +239,31 @@ async def run_crawler(trigger_source: str = "Scheduler") -> bool:
                 # 2. Gửi chi tiết từng gói thầu
                 for item in news:
                     message, detail_url = build_detail_message(item)
-                    reply_markup = None
+
+                    # Lấy cả id và mã TBMT từ item (điều chỉnh key theo dữ liệu thực tế của bạn)
+                    item_id = item.get("id")
+                    ma_tbmt = item.get("maTBMT") or item.get("ma_tbmt")
+
+                    buttons = []
+
+                    # Nút 1: Link xem chi tiết
                     if detail_url:
+                        buttons.append({"text": "🔗 Xem chi tiết TBMT", "url": detail_url})
+
+                    # Nút 2: Nút gọi sự kiện tải HSMT (Truyền id:ma_tbmt)
+                    if item_id and ma_tbmt:
+                        buttons.append({
+                            "text": "📥 Tải HSMT", 
+                            "callback_data": f"download_hsmt:{item_id}:{ma_tbmt}"
+                        })
+
+                    reply_markup = None
+                    if buttons:
+                        # Đặt 2 nút cùng 1 hàng: [[nút 1, nút 2]]
                         reply_markup = {
-                            "inline_keyboard": [
-                                [{"text": "🔗 Xem chi tiết TBMT", "url": detail_url}]
-                            ]
+                            "inline_keyboard": [buttons]
                         }
+
                     await send_telegram(text=message, reply_markup=reply_markup)
 
                 logger.info("✅ Gửi báo cáo Telegram thành công!")

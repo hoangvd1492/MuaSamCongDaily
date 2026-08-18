@@ -261,7 +261,15 @@ def get_tbmt_by_time_range(from_time: str | None = None, to_time: str | None = N
         cursor.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
 
-        
+def is_tbmt_valid(item_id: str, ma_tbmt: str) -> bool:
+    """Kiểm tra xem cặp (id, maTBMT) có khớp và tồn tại trong DB không."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM TBMT WHERE id = ? AND maTBMT = ? LIMIT 1",
+            (str(item_id).strip(), str(ma_tbmt).strip()),
+        )
+        return cursor.fetchone() is not None       
 
 if __name__ == "__main__":
     init_db()

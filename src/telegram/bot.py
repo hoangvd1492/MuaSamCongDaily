@@ -5,12 +5,25 @@ from pathlib import Path
 from curl_cffi.requests import AsyncSession
 from curl_cffi.curl import CurlMime
 
+import io
+
 from telegram import Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
+    CallbackQueryHandler
+)
+
+from telegram.error import TelegramError
+import asyncio
+
+
+from src.worker.worker import (
+    is_task_pending,
+    add_download_task,
+    get_existing_hsmt_file
 )
 
 from src.database.db import (
@@ -21,6 +34,7 @@ from src.database.db import (
     remove_keyword,
     remove_subscriber,
     upsert_subscriber,
+    is_tbmt_valid
 )
 from src.logger import get_logger
 
@@ -590,6 +604,73 @@ async def send_telegram(
 
             except Exception as error:
                 logger.error(f"❌ Gửi Telegram thất bại {chat_id}: {error}")
+
+
+async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+
+    # 1. Trả lời query ngay lập tức để tắt xoay vòng trên nút bấm
+    # CHỈ GỌI MỘT LẦN DUY NHẤT Ở ĐÂY
+    try:
+        await query.answer()
+    except TelegramError:
+        pass
+
+    callback_data = query.data
+    if not callback_data or not callback_data.startswith("download_hsmt:"):
+        return
+
+    # 2. Tách dữ liệu từ chuỗi: "download_hsmt:id:ma_tbmt"
+    # parts sẽ là ["download_hsmt", "id_của_bạn", "mã_tbmt_của_bạn"]
+    parts = callback_data.split(":")
+    
+    if len(parts) != 3:
+        return # Format không đúng, thoát
+
+    _, item_id, ma_tbmt = parts
+    chat_id = query.message.chat_id
+    
+    
+    if not is_tbmt_valid(item_id=item_id, ma_tbmt=ma_tbmt):
+        await query.message.reply_text(
+            f"❌ Thông tin gói thầu không hợp lệ hoặc không tồn tại trong hệ thống!",
+            parse_mode="HTML",
+        )
+        return
+    
+    existing_file = get_existing_hsmt_file(ma_tbmt)
+    if existing_file:
+        with open(existing_file, "rb") as f:
+            await query.message.reply_document(
+                document=f,
+                filename=f"HSMT_{ma_tbmt}.pdf",
+                caption=f"✅ HSMT cho gói <b>{ma_tbmt}</b>!",
+                parse_mode="HTML",
+            )
+        return
+
+    # 3. Kiểm tra xem task đã có trong hàng đợi chưa
+    if is_task_pending(item_id):
+        # KHÔNG GỌI query.answer() ở đây nữa
+        await query.message.reply_text(
+            f"⏳ Yêu cầu cho mã <b>{ma_tbmt}</b> đã được thêm vào hàng đợi trước đó!",
+            parse_mode="HTML"
+        )
+        return
+
+    # 4. Thêm task với đầy đủ id và ma_tbmt vào hàng đợi
+    await add_download_task(
+        id=item_id,           # Đã bổ sung id vào đây
+        ma_tbmt=ma_tbmt,      # Truyền thêm ma_tbmt
+        chat_id=chat_id,
+        message_id=query.message.message_id,
+    )
+
+    # 5. Thông báo cho người dùng
+    await query.message.reply_text(
+        f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
+        parse_mode="HTML",
+    )
 # ==========================================================
 # SETUP BOT
 # ==========================================================
@@ -657,6 +738,9 @@ def setup_bot() -> Application:
     # --------------------------------------------------
     # Error Handler
     # --------------------------------------------------
+
+
+    app.add_handler(CallbackQueryHandler(handle_download_hsmt))
 
     app.add_error_handler(error_handler)
 

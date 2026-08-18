@@ -5,6 +5,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
+
+from src.worker.worker import (
+    hsmt_download_worker
+)
+
 # 1. Load biến môi trường
 load_dotenv()
 
@@ -45,6 +50,8 @@ async def init_scheduler_and_first_run():
     scheduler.add_job(
         scheduled_crawler_job,
         CronTrigger.from_crontab(schedule_cron, timezone=tz),
+        misfire_grace_time=120,  # Cho phép trễ tối đa 2 phút
+        coalesce=True,
         id="tbmt_crawler_job",
         replace_existing=True,
     )
@@ -53,10 +60,7 @@ async def init_scheduler_and_first_run():
 
 
 def main():
-    
     logger.info("=== BẮT ĐẦU KHỞI CHẠY ỨNG DỤNG ===")
-
-
 
     logger.info("Khởi tạo cấu trúc Database...")
     init_db()
@@ -64,14 +68,19 @@ def main():
     logger.info("Khởi tạo dịch vụ Telegram Bot...")
     app = setup_bot()
 
-    # Chạy lần đầu & scheduler trong hook post_init
+    # Chạy lần đầu, scheduler và worker trong hook post_init
     async def post_init(application):
+        # 1. Khởi chạy Background Worker để tiêu thụ Queue tải HSMT
+        asyncio.create_task(hsmt_download_worker(application.bot))
+        logger.info("Worker tải HSMT đã được khởi chạy ngầm.")
+
+        # 2. Khởi chạy scheduler và tác vụ cào lần đầu
         await init_scheduler_and_first_run()
 
     app.post_init = post_init
 
     logger.info("Ứng dụng đang khởi chạy...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
