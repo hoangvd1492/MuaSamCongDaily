@@ -2,6 +2,12 @@ from datetime import datetime
 from urllib.parse import urlencode
 import random
 import time
+import re
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 
 
 def sleep(min_ms=1000, max_ms=5000):
@@ -46,6 +52,53 @@ def query_builder(keyword, page, from_time, to_time):
             ],
         }
     ]
+
+
+
+
+PROMPT_TEMPLATE = """
+    Hãy đóng vai một chuyên gia phân tích hồ sơ thầu hàng đầu. Hãy đọc kỹ toàn bộ Hồ sơ mời thầu (HSMT) đính kèm và lập một BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU dưới dạng MARKDOWN trình bày khoa học và chuyên nghiệp.
+
+    Yêu cầu cấu trúc Báo cáo Markdown như sau (sử dụng bảng Table Markdown cho Nhân sự, Thiết bị, Tài chính):
+
+    # 📋 BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU
+
+    ## I. THÔNG TIN CHUNG GÓI THẦU
+    - **Tên gói thầu:** 
+    - **Bên mời thầu / Chủ đầu tư:** 
+    - **Thời gian thực hiện hợp đồng:** 
+    - **Nguồn vốn:** 
+    - **Hình thức lựa chọn nhà thầu & Phương thức đấu thầu:** 
+    - **Thời điểm đóng thầu / Hiệu lực E-HSDT:** 
+
+    ## II. YÊU CẦU NĂNG LỰC TÀI CHÍNH & KINH NGHIỆM
+    | Tiêu chí | Yêu cầu chi tiết |
+    | :--- | :--- |
+    | **Bảo đảm dự thầu** | |
+    | **Doanh thu bình quân hàng năm** | |
+    | **Hợp đồng tương tự** | |
+    | **Yêu cầu nguồn lực tài chính / Tín dụng** | |
+
+    ## III. YÊU CẦU NHÂN SỰ CHỦ CHỐT
+    Trình bày dưới dạng Bảng Markdown:
+    | STT | Vị trí nhân sự | Số lượng | Trình độ bằng cấp & Chứng chỉ | Kinh nghiệm công tác |
+    | :-: | :--- | :-: | :--- | :--- |
+
+    ## IV. YÊU CẦU THIẾT BỊ / MÁY MÓC CHỦ YẾU (nếu có)
+    Trình bày dưới dạng Bảng Markdown (Nếu không yêu cầu thì ghi rõ "Không yêu cầu"):
+    | STT | Tên loại thiết bị / máy móc | Số lượng | Yêu cầu tính năng / Công suất |
+    | :-: | :--- | :-: | :--- |
+
+    ## V. CÁC ĐIỀU KIỆN & YÊU CẦU ĐẶC BIỆT KHÁC
+    - **Loại hợp đồng & Đơn giá:** 
+    - **Tỷ lệ thầu phụ tối đa:** 
+    - **Bảo đảm thực hiện hợp đồng:** 
+    - **Các yêu cầu tư cách hợp lệ / Chứng chỉ / Giấy phép đặc thù:** 
+    - **Các lưu ý quan trọng khác:** 
+
+    Chỉ trả về nội dung Báo cáo Markdown, không kèm theo câu mở đầu hay giải thích gì khác.
+"""
+
 
 
 PROCESS_APPLY_MAP = {
@@ -106,6 +159,7 @@ INVEST_FIELD_MAP = {
   'TV': "Tư vấn",
   'HON_HOP': "Hỗn hợp",
 }
+
 
 CONTRACT_TYPE_MAP = {
   'TG': "Trọn gói",
@@ -457,3 +511,215 @@ def js_date(value):
 def format_datetime(value):
     value = js_date(value)
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
+
+def _clean_latex_and_text(text: str) -> str:
+    """Tự động làm sạch mọi tàn dư LaTeX, công thức toán và HTML lạ."""
+    if not text:
+        return ""
+
+    # 1. Bóc text thuần từ \text{...}
+    text = re.sub(r"\\text\{([^}]+)\}", r"\1", text)
+
+    # 2. Thay thế toàn bộ lệnh toán học LaTeX sang ký tự Unicode đẹp
+    replacements = {
+        r"\\ge\b": "≥",
+        r"\\geq\b": "≥",
+        r"\\le\b": "≤",
+        r"\\leq\b": "≤",
+        r"\\ne\b": "≠",
+        r"\\neq\b": "≠",
+        r"\\times\b": "×",
+        r"\\approx\b": "≈",
+        r"\\pm\b": "±",
+        r"\\mp\b": "∓",
+        r"\\infty\b": "∞",
+    }
+    for pattern, repl in replacements.items():
+        text = re.sub(pattern, repl, text)
+
+    # 3. Gỡ các bao đóng LaTeX: \(...\), \[...\], $...$
+    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
+    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
+    text = text.replace("$", "")
+
+    # 4. Xóa dấu backslash (\) thừa phía trước các dấu ngoặc
+    text = re.sub(r"\\([\\(\\)\[\]{}])", r"\1", text)
+
+    return text
+
+
+def _add_formatted_text(paragraph, text: str, is_bold_all: bool = False):
+    """
+    Bóc tách và định dạng:
+    - Xử lý xuống dòng qua thẻ <br>, <br/>, <br />
+    - Xử lý in đậm **...**, in nghiêng *...*, mã `...`
+    """
+    if not text:
+        return
+
+    # Làm sạch LaTeX trước
+    text = _clean_latex_and_text(text)
+
+    # Cắt dòng theo thẻ <br>
+    sub_lines = re.split(r"(?i)<br\s*/?>", text)
+
+    for line_idx, line in enumerate(sub_lines):
+        line = line.strip()
+        tokens = re.split(r"(\*\*.*?\*\*|\*.*?\*|`.*?`)", line)
+
+        for token in tokens:
+            if not token:
+                continue
+
+            if token.startswith("**") and token.endswith("**") and len(token) >= 4:
+                run = paragraph.add_run(token[2:-2])
+                run.bold = True
+            elif token.startswith("*") and token.endswith("*") and len(token) >= 2:
+                run = paragraph.add_run(token[1:-1])
+                run.italic = True
+                if is_bold_all:
+                    run.bold = True
+            elif token.startswith("`") and token.endswith("`") and len(token) >= 2:
+                run = paragraph.add_run(token[1:-1])
+                run.font.name = "Consolas"
+                run.font.size = Pt(9.5)
+                run.font.color.rgb = RGBColor(180, 40, 40)
+            else:
+                run = paragraph.add_run(token)
+                if is_bold_all:
+                    run.bold = True
+
+        # Nếu có thẻ <br>, thêm ngắt dòng trong ô/đoạn
+        if line_idx < len(sub_lines) - 1:
+            paragraph.add_run().add_break()
+
+
+def _create_word_table(doc, table_data):
+    """Tạo bảng chuẩn Word, viền Table Grid và tô màu header."""
+    if not table_data:
+        return
+
+    num_rows = len(table_data)
+    num_cols = max(len(row) for row in table_data)
+    table = doc.add_table(rows=num_rows, cols=num_cols)
+    table.style = "Table Grid"
+
+    for r_idx, row in enumerate(table_data):
+        is_header = (r_idx == 0)
+        for c_idx in range(num_cols):
+            cell_text = row[c_idx] if c_idx < len(row) else ""
+            cell = table.cell(r_idx, c_idx)
+            cell.text = ""
+            p = cell.paragraphs[0]
+
+            _add_formatted_text(p, cell_text, is_bold_all=is_header)
+
+            if is_header:
+                shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F0F4F8"/>')
+                cell._tc.get_or_add_tcPr().append(shading)
+
+
+def save_markdown_to_docx(markdown_text: str, output_path: str, title: str = ""):
+    """Tự động phân tích toàn bộ cấu trúc Markdown xuất sang file Word."""
+    doc = Document()
+
+    if title:
+        main_title = doc.add_heading(title, level=0)
+        main_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    cleaned_text = markdown_text.strip()
+    if cleaned_text.startswith("```"):
+        cleaned_text = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned_text)
+        cleaned_text = re.sub(r"\n?```$", "", cleaned_text)
+
+    lines = cleaned_text.splitlines()
+    table_buffer = []
+    in_table = False
+    in_code_block = False
+    code_buffer = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 1. Code Block
+        if stripped.startswith("```"):
+            if in_code_block:
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.3)
+                run = p.add_run("\n".join(code_buffer))
+                run.font.name = "Consolas"
+                run.font.size = Pt(9.5)
+                code_buffer = []
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_buffer.append(line)
+            continue
+
+        # 2. Xử lý Bảng
+        if stripped.startswith("|") and stripped.endswith("|"):
+            if re.match(r"^\|[\s\-:|]+\|$", stripped):
+                continue
+            cols = [col.replace(r"\|", "|").strip() for col in re.split(r"(?<!\\)\|", stripped)[1:-1]]
+            table_buffer.append(cols)
+            in_table = True
+            continue
+        else:
+            if in_table:
+                _create_word_table(doc, table_buffer)
+                table_buffer = []
+                in_table = False
+
+        if not stripped:
+            continue
+
+        # 3. Kẻ ngang ---
+        if re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", stripped):
+            p = doc.add_paragraph()
+            run = p.add_run("―" * 40)
+            run.font.color.rgb = RGBColor(160, 160, 160)
+            continue
+
+        # 4. Blockquote >
+        if stripped.startswith(">"):
+            quote_text = re.sub(r"^>\s?", "", stripped)
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0.4)
+            run = p.add_run("“ ")
+            run.italic = True
+            run.font.color.rgb = RGBColor(90, 90, 90)
+            _add_formatted_text(p, quote_text)
+            continue
+
+        # 5. Heading (#, ##, ###)
+        heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading_match:
+            level = min(len(heading_match.group(1)), 3)
+            doc.add_heading(_clean_latex_and_text(heading_match.group(2)), level=level)
+            continue
+
+        # 6. Danh sách Bullet (- hoặc *)
+        if re.match(r"^[-*+]\s+", stripped):
+            content = re.sub(r"^[-*+]\s+", "", stripped)
+            p = doc.add_paragraph(style="List Bullet")
+            _add_formatted_text(p, content)
+            continue
+
+        # 7. Danh sách có số (1., 2.)
+        if re.match(r"^\d+[\.\)]\s+", stripped):
+            content = re.sub(r"^\d+[\.\)]\s+", "", stripped)
+            p = doc.add_paragraph(style="List Number")
+            _add_formatted_text(p, content)
+            continue
+
+        # 8. Văn bản thường
+        p = doc.add_paragraph()
+        _add_formatted_text(p, stripped)
+
+    if in_table and table_buffer:
+        _create_word_table(doc, table_buffer)
+
+    doc.save(output_path)
