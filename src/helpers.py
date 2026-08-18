@@ -10,8 +10,16 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 
 
-def sleep(min_ms=1000, max_ms=5000):
-    time.sleep(random.randint(min_ms, max_ms) / 1000)
+import asyncio
+
+
+async def async_sleep(min_ms=1000, max_ms=5000):
+    await asyncio.sleep(random.randint(min_ms, max_ms) / 1000)
+
+
+# Alias để tương thích
+async def sleep(min_ms=1000, max_ms=5000):
+    await async_sleep(min_ms, max_ms)
 
 
 def query_builder(keyword, page, from_time, to_time):

@@ -26,7 +26,7 @@ from src.database.db import (
     upsert_tbmt,
 )
 
-from src.helpers import sleep
+from src.helpers import async_sleep
 
 
 
@@ -82,7 +82,7 @@ async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_t
             logger.warning(f"Page {current_page + 1} failed: {err}")
         finally:
             current_page += 1
-            sleep()
+            await async_sleep()
 
     # Loại bỏ ID trùng lặp giữ nguyên thứ tự xuất hiện
     unique_notify_ids = list(dict.fromkeys(all_notify_ids))
@@ -159,7 +159,7 @@ async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_t
             logger.warning(f"notifyId={notify_id} failed: {err}")
         finally:
             index += 1
-            sleep()
+            await async_sleep()
 
 # Khởi tạo khóa dùng chung cho toàn bộ tiến trình cào
 crawler_lock = asyncio.Lock()
