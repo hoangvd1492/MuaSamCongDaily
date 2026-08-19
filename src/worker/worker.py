@@ -29,7 +29,6 @@ def get_existing_baocao_file(ma_tbmt: str) -> Path | None:
 def is_task_pending(task_id: str | int) -> bool:
     return task_id in PENDING_TASKS
 
-
 async def add_download_task(id: str | int, ma_tbmt: str, chat_id: int) -> bool:
     if is_task_pending(id):
         PENDING_TASKS[id].add(chat_id)
@@ -78,12 +77,9 @@ async def hsmt_download_worker(bot):
             docx_success = docx_path.is_file() and docx_path.stat().st_size > 0
             
             if not docx_success:
-                # Thử lần 1: NotebookLM (Chạy trong thread riêng tránh block Event Loop)
                 try:
                     logger.info(f"[{ma_tbmt}] Thử phân tích qua NotebookLM...")
-                    docx_success = await asyncio.to_thread(
-                        notebooklm_analyse, str(pdf_path), str(docx_path), ma_tbmt
-                    )
+                    docx_success = await notebooklm_analyse(pdf_path, docx_path, ma_tbmt)
                 except Exception as e_nb:
                     logger.error(f"Lỗi khi chạy NotebookLM gói {ma_tbmt}: {e_nb}")
                     docx_success = False

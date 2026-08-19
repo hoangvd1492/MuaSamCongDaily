@@ -1,85 +1,104 @@
-import os
 import asyncio
-from dotenv import load_dotenv
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+import os
 import pytz
-
-
-from src.worker.worker import (
-    hsmt_download_worker
-)
+from dotenv import load_dotenv
 
 # 1. Load biến môi trường
 load_dotenv()
 
-# 2. Khởi tạo logger
-from src.logger import get_logger, setup_app_logging
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
+from src.crawler import run_crawler
+from src.database.db import has_tbmt, init_db
+from src.logger import get_logger, setup_app_logging
+from src.telegram.bot import setup_bot
+from src.worker.worker import hsmt_download_worker
+
+# 2. Thiết lập logging
 setup_app_logging()
 logger = get_logger("APP.MAIN")
 
-from src.telegram.bot import setup_bot
-from src.database.db import init_db, has_tbmt
-from src.crawler import run_crawler  
-
-from src.playwright.playwright import get_server_time
-
 
 async def scheduled_crawler_job():
-    """Hàm bọc gọi crawler cho scheduler"""
+    """Hàm bọc gọi crawler cho scheduler chạy định kỳ"""
     logger.info("⏰ Bắt đầu tiến trình crawl theo lịch định kỳ...")
-    await run_crawler()
-
-
-async def init_scheduler_and_first_run():
-    """Crawl lần đầu (chờ hoàn thành xong) rồi mới bật Cron Scheduler"""
-    # 1. Nếu DB chưa có dữ liệu -> BẮT BUỘC ĐỢI CRAWL XONG (dùng await thay vì create_task)
-    if not has_tbmt():
-        logger.info("Database chưa có TBMT, tiến hành crawl dữ liệu lần đầu (đang chờ hoàn thành)...")
+    try:
         await run_crawler()
-        logger.info("✅ Đã crawl xong dữ liệu lần đầu!")
-    else:
-        logger.info("Database đã có dữ liệu TBMT, bỏ qua bước crawl ban đầu.")
+    except Exception as e:
+        logger.error(f"Lỗi trong quá trình crawl định kỳ: {e}", exc_info=True)
 
-    # 2. Khởi động Cron Scheduler sau khi đã có dữ liệu
-    schedule_cron = os.getenv("CRON_SCHEDULE", "1 12 * * *")
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        scheduled_crawler_job,
-        CronTrigger.from_crontab(schedule_cron, timezone=tz),
-        misfire_grace_time=120,  # Cho phép trễ tối đa 2 phút
-        coalesce=True,
-        id="tbmt_crawler_job",
-        replace_existing=True,
-    )
-    scheduler.start()
-    logger.info(f"✅ Cron scheduler đã khởi động với cấu hình: '{schedule_cron}' (Asia/Ho_Chi_Minh)")
+async def init_scheduler_and_first_run(application=None):
+    """Cào dữ liệu lần đầu chạy ngầm và kích hoạt Cron Scheduler."""
+    try:
+        # 1. Quét dữ liệu lần đầu nếu DB trống (chạy ngầm, không chặn bot)
+        if not has_tbmt():
+            logger.info("Database chưa có TBMT, tiến hành crawl dữ liệu lần đầu...")
+            await run_crawler()
+            logger.info("✅ Đã crawl xong dữ liệu lần đầu!")
+        else:
+            logger.info("Database đã có dữ liệu TBMT, bỏ qua bước crawl ban đầu.")
+
+        # 2. Cấu hình và khởi động Scheduler
+        schedule_cron = os.getenv("CRON_SCHEDULE", "1 12 * * *")
+        tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            scheduled_crawler_job,
+            CronTrigger.from_crontab(schedule_cron, timezone=tz),
+            misfire_grace_time=120,
+            coalesce=True,
+            id="tbmt_crawler_job",
+            replace_existing=True,
+        )
+        scheduler.start()
+
+        # Lưu tham chiếu để tránh bị Garbage Collection thu hồi
+        if application:
+            application.bot_data["scheduler"] = scheduler
+
+        logger.info(
+            f"✅ Cron scheduler đã khởi động với cấu hình: '{schedule_cron}' (Asia/Ho_Chi_Minh)"
+        )
+    except Exception as e:
+        logger.error(f"Lỗi khởi tạo Crawler/Scheduler nền: {e}", exc_info=True)
 
 
 def main():
     logger.info("=== BẮT ĐẦU KHỞI CHẠY ỨNG DỤNG ===")
 
+    # 1. Khởi tạo database
     logger.info("Khởi tạo cấu trúc Database...")
     init_db()
 
+    # 2. Khởi tạo ứng dụng Bot Telegram
     logger.info("Khởi tạo dịch vụ Telegram Bot...")
     app = setup_bot()
 
-    # Chạy lần đầu, scheduler và worker trong hook post_init
+    # 3. Hook post_init: Nạp các tác vụ ngầm vào Event Loop
     async def post_init(application):
-        # 1. Khởi chạy Background Worker để tiêu thụ Queue tải HSMT
+        # [Task 1] Khởi chạy Worker tải HSMT & Báo cáo AI trong nền
         asyncio.create_task(hsmt_download_worker(application.bot))
-        logger.info("Worker tải HSMT đã được khởi chạy ngầm.")
+        logger.info("✅ Worker tải HSMT & AI đã được khởi chạy ngầm.")
 
-        # 2. Khởi chạy scheduler và tác vụ cào lần đầu
-        await init_scheduler_and_first_run()
+        # [Task 2] Khởi chạy Crawler lần đầu & Scheduler trong nền
+        asyncio.create_task(init_scheduler_and_first_run(application))
+        logger.info("✅ Tiến trình Crawler & Scheduler đã được khởi chạy ngầm.")
+
+    # 4. Hook post_shutdown: Dọn dẹp tài nguyên khi tắt ứng dụng
+    async def post_shutdown(application):
+        scheduler = application.bot_data.get("scheduler")
+        if scheduler and scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("✅ Đã đóng Scheduler an toàn.")
 
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
 
-    logger.info("Ứng dụng đang khởi chạy...")
+    # 5. Khởi động vòng lặp nhận tin nhắn Telegram
+    logger.info("Ứng dụng đang khởi chạy và lắng nghe tin nhắn...")
     app.run_polling(drop_pending_updates=True)
 
 
