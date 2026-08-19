@@ -2,6 +2,7 @@ import functools
 import json
 import os
 from pathlib import Path
+import asyncio
 from curl_cffi.requests import AsyncSession
 from curl_cffi.curl import CurlMime
 
@@ -16,7 +17,6 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
-
 
 
 from src.worker.worker import (
@@ -78,6 +78,7 @@ def is_admin(chat_id: str) -> bool:
 def admin_required(func):
     """
     Decorator chặn người dùng không phải Admin.
+    Kiểm tra dựa trên ID người gửi (effective_user.id).
     """
 
     @functools.wraps(func)
@@ -87,34 +88,28 @@ def admin_required(func):
         *args,
         **kwargs,
     ):
-        chat = update.effective_chat
+        user = update.effective_user
         message = update.effective_message
 
-        if chat is None:
+        # Kiểm tra nếu update không chứa thông tin người gửi (ví dụ: kênh ẩn danh, service updates)
+        if user is None:
             logger.warning(
-                f"Telegram update không có effective_chat. "
-                f"Update ID={update.update_id}"
+                f"Telegram update không có effective_user. Update ID={update.update_id}"
             )
             return
 
-        if message is None:
+        user_id = str(user.id)
+
+        # Kiểm tra quyền Admin dựa trên User ID
+        if not is_admin(user_id):
             logger.warning(
-                f"Telegram update không có effective_message. "
-                f"Update ID={update.update_id}"
-            )
-            return
-
-        chat_id = str(chat.id)
-
-        if not is_admin(chat_id):
-            logger.warning(
-                f"Người dùng {chat_id} cố ý truy cập "
-                f"lệnh admin trái phép."
+                f"Người dùng {user_id} (@{user.username}) cố ý truy cập lệnh admin trái phép."
             )
 
-            await message.reply_text(
-                "⛔ Bạn không có quyền Admin để thực hiện lệnh này."
-            )
+            if message:
+                await message.reply_text(
+                    "⛔ Bạn không có quyền Admin để thực hiện lệnh này."
+                )
             return
 
         return await func(
@@ -125,8 +120,6 @@ def admin_required(func):
         )
 
     return wrapper
-
-
 # ==========================================================
 # PUBLIC COMMANDS
 # ==========================================================
@@ -178,18 +171,20 @@ async def help_cmd(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     message = update.effective_message
-    chat = update.effective_chat
+    user = update.effective_user  # Lấy trực tiếp thông tin người gửi
 
-    if message is None or chat is None:
+    if message is None or user is None:
         logger.warning(
-            f"/help không có message/chat. "
+            f"/help không có message/user. "
             f"Update ID={update.update_id}"
         )
         return
 
-    chat_id = str(chat.id)
+    # Lấy ID của chính người gửi (dạng chuỗi)
+    user_id = str(user.id)
 
-    user_is_admin = is_admin(chat_id)
+    # Kiểm tra xem người gửi có phải là Admin hay không
+    user_is_admin = is_admin(user_id)
 
     help_text = (
         "📖 **DANH SÁCH LỆNH**\n\n"
@@ -201,25 +196,19 @@ async def help_cmd(
     if user_is_admin:
         help_text += (
             "\n🛡 **Lệnh Quản trị (Admin):**\n"
-            "• `/adduser <chat_id> <username> [role]` "
-            ": Thêm user (role: `admin` hoặc `user`)\n"
-            "• `/removeuser <chat_id>` "
-            ": Xóa user\n"
-            "• `/listuser` "
-            ": Danh sách user\n"
-            "• `/addkw <từ_khóa>` "
-            ": Thêm từ khóa theo dõi\n"
-            "• `/removekw <từ_khóa>` "
-            ": Xóa từ khóa\n"
-            "• `/listkw` "
-            ": Danh sách từ khóa\n"
+            "• `/crawl` : Chạy cào dữ liệu ngay lập tức\n"
+            "• `/adduser <chat_id> <username> [role]` : Thêm user (role: `admin` hoặc `user`)\n"
+            "• `/removeuser <chat_id>` : Xóa user\n"
+            "• `/listuser` : Danh sách user\n"
+            "• `/addkw <từ_khóa>` : Thêm từ khóa theo dõi\n"
+            "• `/removekw <từ_khóa>` : Xóa từ khóa\n"
+            "• `/listkw` : Danh sách từ khóa\n"
         )
 
     await message.reply_text(
         help_text,
         parse_mode="Markdown",
     )
-
 
 # ==========================================================
 # USER MANAGEMENT
@@ -492,8 +481,28 @@ async def list_kw_cmd(
         "\n".join(lines),
         parse_mode="Markdown",
     )
+    
+@admin_required
+async def crawl_cmd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    message = update.effective_message
+    if message is None:
+        return
 
+    from src.crawler import crawler_lock, run_crawler
 
+    if crawler_lock.locked():
+        await message.reply_text("⏳ Tiến trình đang bận chạy, vui lòng đợi!")
+        return
+
+    await message.reply_text(
+        "🚀 Đã kích hoạt cào dữ liệu ngầm!"
+    )
+
+    # Đẩy tác vụ chạy ngầm -> Giải phóng handler ngay lập tức
+    asyncio.create_task(run_crawler(trigger_source="Admin Command"))
 # ==========================================================
 # ERROR HANDLER
 # ==========================================================
@@ -719,6 +728,8 @@ def setup_bot() -> Application:
     app.add_handler(
         CommandHandler("listuser", list_user_cmd)
     )
+    
+   
 
     # --------------------------------------------------
     # Keyword Management
@@ -742,6 +753,10 @@ def setup_bot() -> Application:
 
 
     app.add_handler(CallbackQueryHandler(handle_download_hsmt))
+    
+    app.add_handler(
+                CommandHandler("crawl", crawl_cmd)
+            )
 
     app.add_error_handler(error_handler)
 
