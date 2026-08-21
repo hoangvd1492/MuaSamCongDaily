@@ -1,7 +1,6 @@
 from datetime import datetime
 from urllib.parse import urlencode
 import random
-import time
 import re
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
@@ -64,47 +63,78 @@ def query_builder(keyword, page, from_time, to_time):
 
 
 
-PROMPT_TEMPLATE = """
-    Hãy đóng vai một chuyên gia phân tích hồ sơ thầu hàng đầu. Hãy đọc kỹ toàn bộ Hồ sơ mời thầu (HSMT) đính kèm và lập một BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU dưới dạng MARKDOWN trình bày khoa học và chuyên nghiệp.
+GEMINI_PROMPT_TEMPLATE = """
+Hãy đóng vai một chuyên gia phân tích hồ sơ thầu hàng đầu. Bạn được cung cấp TẤT CẢ các file trong Hồ sơ mời thầu:
+- File chính `*_HSMT`: Hồ sơ mời thầu tổng thể.
+- File phụ lục `*_TCDG`: Chương 3 - Tiêu chuẩn đánh giá E-HSDT.
+- File phụ lục `*_YCKT`: Chương 5 - Yêu cầu kỹ thuật.
 
-    Yêu cầu cấu trúc Báo cáo Markdown như sau (sử dụng bảng Table Markdown cho Nhân sự, Thiết bị, Tài chính):
+Hãy đọc, đối chiếu và tổng hợp thông tin từ TẤT CẢ các file được gửi đính kèm để lập một BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU dưới dạng MARKDOWN chi tiết, chính xác và chuyên nghiệp theo đúng cấu trúc sau:
 
-    # 📋 BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU
+# 📋 BÁO CÁO PHÂN TÍCH HỒ SƠ MỜI THẦU TỔNG HỢP
 
-    ## I. THÔNG TIN CHUNG GÓI THẦU
-    - **Tên gói thầu:** 
-    - **Bên mời thầu / Chủ đầu tư:** 
-    - **Thời gian thực hiện hợp đồng:** 
-    - **Nguồn vốn:** 
-    - **Hình thức lựa chọn nhà thầu & Phương thức đấu thầu:** 
-    - **Thời điểm đóng thầu / Hiệu lực E-HSDT:** 
+## I. THÔNG TIN CHUNG VÀ GIÁ TRỊ GÓI THẦU
+- **Tên gói thầu:** 
+- **Số E-TBMT:**
+- **Bên mời thầu / Chủ đầu tư:** 
+- **Giá trị gói thầu:** (BẮT BUỘC TRÍCH XUẤT chính xác giá tiền bằng số và bằng chữ)
+- **Dự toán gói thầu:** (BẮT BUỘC TRÍCH XUẤT chính xác giá tiền bằng số và bằng chữ)
+- **Thời gian yêu cầu thực hiện hợp đồng:** (Ghi rõ bao nhiêu ngày, bao nhiêu tháng thực hiện) (BẮT BUỘC TRÍCH XUẤT)
+- **Loại hợp đồng:** 
+- **Nguồn vốn:** 
+- **Hình thức lựa chọn nhà thầu & Phương thức đấu thầu:** 
+- **Thời điểm đóng thầu / Hiệu lực E-HSDT:** 
 
-    ## II. YÊU CẦU NĂNG LỰC TÀI CHÍNH & KINH NGHIỆM
-    | Tiêu chí | Yêu cầu chi tiết |
-    | :--- | :--- |
-    | **Bảo đảm dự thầu** | |
-    | **Doanh thu bình quân hàng năm** | |
-    | **Hợp đồng tương tự** | |
-    | **Yêu cầu nguồn lực tài chính / Tín dụng** | |
+## II. KHỐI LƯỢNG THỰC HIỆN VÀ YÊU CẦU KỸ THUẬT (Tổng hợp từ HSMT, Chương IV - BIỂU MẪU MỜI THẦU, Chương V...)
+### 1. Khối lượng thực hiện chi tiết (Lấy từ Chương IV - BIỂU MẪU MỜI THẦU & các phụ lục):
+- Liệt kê cụ thể: Thực hiện công việc gì, nội dung chi tiết thế nào, khối lượng/số lượng ra sao.
+- Trình bày dưới dạng Bảng Markdown chi tiết:
+  | STT | Hạng mục công việc / Nội dung công việc | Đơn vị tính | Khối lượng / Số lượng | Ghi chú / Mô tả chi tiết |
+  | :-: | :--- | :-: | :-: | :--- |
 
-    ## III. YÊU CẦU NHÂN SỰ CHỦ CHỐT
-    Trình bày dưới dạng Bảng Markdown:
-    | STT | Vị trí nhân sự | Số lượng | Trình độ bằng cấp & Chứng chỉ | Kinh nghiệm công tác |
-    | :-: | :--- | :-: | :--- | :--- |
+### 2. Yêu cầu về phần mềm thi công & Giải pháp công nghệ:
+- Liệt kê chi tiết tất cả các yêu cầu về phần mềm thi công / phần mềm số hóa / phần mềm bóc tách / phần mềm quản lý / giải pháp chống thất thoát dữ liệu (DLP) / bảo mật được quy định trong HSMT, Chương V hoặc các file đính kèm liên quan.
+- Nêu rõ: Tên/loại phần mềm, tính năng/yêu cầu kỹ thuật, bản quyền, số lượng sử dụng, khả năng tích hợp/xuất dữ liệu, các tiêu chuẩn an toàn thông tin (kiểm thử mã độc, ATTT), yêu cầu demo (nếu có)... (Nếu không yêu cầu thì ghi 'Không có yêu cầu cụ thể').
 
-    ## IV. YÊU CẦU THIẾT BỊ / MÁY MÓC CHỦ YẾU (nếu có)
-    Trình bày dưới dạng Bảng Markdown (Nếu không yêu cầu thì ghi rõ "Không yêu cầu"):
-    | STT | Tên loại thiết bị / máy móc | Số lượng | Yêu cầu tính năng / Công suất |
-    | :-: | :--- | :-: | :--- |
+## III. YÊU CẦU NĂNG LỰC CÔNG TY & CHỨNG CHỈ (Tổng hợp từ HSMT, Chương III, Chương V...)
+### 1. Các chứng chỉ ISO đối với công ty / nhà sản xuất vật tư:
+- Liệt kê chi tiết các chứng chỉ ISO được yêu cầu (ví dụ: ISO 9001, ISO 27001, ISO 14001, ISO 45001, ISO/IEC 20000...). Nêu rõ đối tượng áp dụng (Công ty hoặc Nhà sản xuất vật tư) và phạm vi chứng nhận bắt buộc (nếu có).
 
-    ## V. CÁC ĐIỀU KIỆN & YÊU CẦU ĐẶC BIỆT KHÁC
-    - **Loại hợp đồng & Đơn giá:** 
-    - **Tỷ lệ thầu phụ tối đa:** 
-    - **Bảo đảm thực hiện hợp đồng:** 
-    - **Các yêu cầu tư cách hợp lệ / Chứng chỉ / Giấy phép đặc thù:** 
-    - **Các lưu ý quan trọng khác:** 
+### 2. Các chứng chỉ / chứng nhận hoạt động trong lĩnh vực lưu trữ / số hóa / CNTT:
+- Nêu chi tiết các giấy chứng nhận, giấy phép, hoặc chứng chỉ đăng ký hoạt động chuyên ngành trong lĩnh vực lưu trữ, chỉnh lý tài liệu, số hóa, công nghệ thông tin, an toàn thông tin... (ví dụ: Đăng ký dịch vụ lưu trữ cấp tỉnh theo Luật Lưu trữ 2024...).
 
-    Chỉ trả về nội dung Báo cáo Markdown, không kèm theo câu mở đầu hay giải thích gì khác.
+### 3. Các chứng chỉ, giấy phép & năng lực pháp lý khác của công ty:
+- Đăng ký doanh nghiệp, giấy phép kinh doanh, chứng nhận đại lý/hãng sản xuất, giấy xác nhận năng lực, chứng nhận bảo mật, tính hợp lệ đấu thầu, v.v.
+
+### 4. Năng lực tài chính & Hợp đồng tương tự:
+| Tiêu chí | Yêu cầu chi tiết |
+| :--- | :--- |
+| **Bảo đảm dự thầu** | Giá trị & thời hạn hiệu lực, hình thức bảo đảm |
+| **Doanh thu bình quân hàng năm** | Số tiền tối thiểu (VNĐ) trong các năm gần nhất |
+| **Hợp đồng tương tự** | Số lượng, giá trị tối thiểu từng HĐ, tính chất tương tự |
+| **Yêu cầu nguồn lực tài chính / Tín dụng** | |
+
+## IV. YÊU CẦU NHÂN SỰ
+- Nêu rõ quy định tại Chương III (Có yêu cầu hay Không yêu cầu nhân sự chủ chốt trong chấm điểm năng lực).
+- Liệt kê các yêu cầu nhân sự / cam kết huy động nhân lực thực tế quy định tại Chương V (nếu có).
+Trình bày dưới dạng Bảng Markdown (nếu có danh sách nhân sự).
+
+## V. YÊU CẦU THIẾT BỊ, MÁY MÓC & DỤNG CỤ THI CÔNG
+- Nêu ngắn gọn quy định tại Chương III (Có yêu cầu hay Không yêu cầu thiết bị chủ yếu trong tiêu chuẩn đánh giá năng lực).
+- **BẮT BUỘC TRÍCH XUẤT THÀNH BẢNG MARKDOWN CHI TIẾT**: Lập bảng đầy đủ tất cả các loại máy móc, thiết bị, dụng cụ thi công (Máy scan/quét chuyên dụng số hóa, máy vi tính PC, máy in A4, xe đẩy tài liệu, ghim dập, thiết bị bảo hộ, giải pháp thiết bị...) và định mức/số lượng được quy định tại **Chương V (Yêu cầu về kỹ thuật)**. Dù Chương III ghi "Không yêu cầu thiết bị chủ yếu", vẫn **BẮT BUỘC** phải trích xuất bảng danh mục thiết bị thi công từ Chương V này!
+Trình bày dưới dạng Bảng Markdown chi tiết:
+| STT | Tên loại thiết bị / máy móc / dụng cụ thi công | Số lượng / Định mức huy động | Yêu cầu tính năng / Thông số kỹ thuật / Ghi chú |
+| :-: | :--- | :-: | :--- |
+
+## VI. BẢNG TÓM TẮT ĐIỀU KIỆN TIÊN QUYẾT (ĐẠT / KHÔNG ĐẠT) & LƯU Ý ĐẶC BIỆT
+- Bảng tổng hợp các chỉ tiêu bắt buộc ĐẠT/KHÔNG ĐẠT.
+- Loại hợp đồng, tỷ lệ thầu phụ tối đa, bảo đảm thực hiện hợp đồng, các lưu ý quan trọng.
+
+LƯU Ý QUAN TRỌNG:
+- Lấy file chính `*_HSMT` làm gốc, đối chiếu chéo thông tin với Chương 3 (`*_TCDG`) và Chương 5 (`*_YCKT`).
+- Trích xuất chính xác số liệu có trong hồ sơ, không tự ý bịa đặt.
+- Chỉ trả về nội dung Báo cáo Markdown, không kèm theo câu giải thích ngoài lề.
+
 """
 
 
@@ -519,16 +549,22 @@ def js_date(value):
 def format_datetime(value):
     value = js_date(value)
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
-
 def _clean_latex_and_text(text: str) -> str:
     """Tự động làm sạch mọi tàn dư LaTeX, công thức toán và HTML lạ."""
     if not text:
         return ""
 
-    # 1. Bóc text thuần từ \text{...}
-    text = re.sub(r"\\text\{([^}]+)\}", r"\1", text)
+    # 1. Bóc text thuần từ \text{...}, \mathbf{...}, \textbf{...}, \mathrm{...}, \mathit{...}, \underline{...}
+    text = re.sub(
+        r"\\(?:text|mathbf|textbf|mathrm|mathit|underline|boldsymbol|bm)\{([^}]+)\}",
+        r"\1",
+        text,
+    )
 
-    # 2. Thay thế toàn bộ lệnh toán học LaTeX sang ký tự Unicode đẹp
+    # 2. Xử lý phân số cơ bản \frac{a}{b} -> a/b
+    text = re.sub(r"\\frac\{([^}]+)\}\{([^}]+)\}", r"\1/\2", text)
+
+    # 3. Thay thế toàn bộ ký hiệu toán học LaTeX sang ký tự Unicode
     replacements = {
         r"\\ge\b": "≥",
         r"\\geq\b": "≥",
@@ -541,27 +577,27 @@ def _clean_latex_and_text(text: str) -> str:
         r"\\pm\b": "±",
         r"\\mp\b": "∓",
         r"\\infty\b": "∞",
+        r"\\circ\b": "°",
+        r"\\rightarrow\b": "→",
+        r"\\leftarrow\b": "←",
+        r"\\leftrightarrow\b": "↔",
     }
     for pattern, repl in replacements.items():
         text = re.sub(pattern, repl, text)
 
-    # 3. Gỡ các bao đóng LaTeX: \(...\), \[...\], $...$
+    # 4. Gỡ các bao đóng LaTeX: \(...\), \[...\], $...$
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     text = text.replace("$", "")
 
-    # 4. Xóa dấu backslash (\) thừa phía trước các dấu ngoặc
-    text = re.sub(r"\\([\\(\\)\[\]{}])", r"\1", text)
+    # 5. Xóa dấu backslash (\) thừa phía trước các dấu ngoặc hoặc ký tự đặc biệt
+    text = re.sub(r"\\([\\(\\)\[\]{}%_&])", r"\1", text)
 
-    return text
+    return text.strip()
 
 
 def _add_formatted_text(paragraph, text: str, is_bold_all: bool = False):
-    """
-    Bóc tách và định dạng:
-    - Xử lý xuống dòng qua thẻ <br>, <br/>, <br />
-    - Xử lý in đậm **...**, in nghiêng *...*, mã `...`
-    """
+    """Bóc tách và định dạng in đậm, nghiêng, code, xuống dòng."""
     if not text:
         return
 
@@ -597,7 +633,7 @@ def _add_formatted_text(paragraph, text: str, is_bold_all: bool = False):
                 if is_bold_all:
                     run.bold = True
 
-        # Nếu có thẻ <br>, thêm ngắt dòng trong ô/đoạn
+        # Thêm ngắt dòng nếu có <br>
         if line_idx < len(sub_lines) - 1:
             paragraph.add_run().add_break()
 
@@ -613,7 +649,7 @@ def _create_word_table(doc, table_data):
     table.style = "Table Grid"
 
     for r_idx, row in enumerate(table_data):
-        is_header = (r_idx == 0)
+        is_header = r_idx == 0
         for c_idx in range(num_cols):
             cell_text = row[c_idx] if c_idx < len(row) else ""
             cell = table.cell(r_idx, c_idx)
@@ -671,7 +707,10 @@ def save_markdown_to_docx(markdown_text: str, output_path: str, title: str = "")
         if stripped.startswith("|") and stripped.endswith("|"):
             if re.match(r"^\|[\s\-:|]+\|$", stripped):
                 continue
-            cols = [col.replace(r"\|", "|").strip() for col in re.split(r"(?<!\\)\|", stripped)[1:-1]]
+            cols = [
+                col.replace(r"\|", "|").strip()
+                for col in re.split(r"(?<!\\)\|", stripped)[1:-1]
+            ]
             table_buffer.append(cols)
             in_table = True
             continue
@@ -706,12 +745,14 @@ def save_markdown_to_docx(markdown_text: str, output_path: str, title: str = "")
         heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
         if heading_match:
             level = min(len(heading_match.group(1)), 3)
-            doc.add_heading(_clean_latex_and_text(heading_match.group(2)), level=level)
+            doc.add_heading(
+                _clean_latex_and_text(heading_match.group(2)), level=level
+            )
             continue
 
-        # 6. Danh sách Bullet (- hoặc *)
-        if re.match(r"^[-*+]\s+", stripped):
-            content = re.sub(r"^[-*+]\s+", "", stripped)
+        # 6. Danh sách Bullet (- hoặc * hoặc + hoặc • hoặc ·)
+        if re.match(r"^[-*+•·]\s+", stripped):
+            content = re.sub(r"^[-*+•·]\s+", "", stripped)
             p = doc.add_paragraph(style="List Bullet")
             _add_formatted_text(p, content)
             continue
@@ -731,3 +772,64 @@ def save_markdown_to_docx(markdown_text: str, output_path: str, title: str = "")
         _create_word_table(doc, table_buffer)
 
     doc.save(output_path)
+    
+    
+    
+    
+def sanitize_name(name: str) -> str:
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
+
+from typing import Optional
+
+
+from typing import Optional
+
+
+def build_tbmt_context(tbmt: Optional[dict]) -> str:
+    """
+    Trích xuất và định dạng toàn bộ các trường từ bảng TBMT thành context Markdown.
+    """
+    if not tbmt:
+        return ""
+
+    fields = [
+        ("Mã E-TBMT", tbmt.get("maTBMT")),
+        ("Plan ID", tbmt.get("planId")),
+        ("Mã KHLCNT", tbmt.get("maKHLCNT")),
+        ("Tên gói thầu", tbmt.get("tenGoiThau")),
+        ("Tên dự toán mua sắm", tbmt.get("tenDuToanMuaSam")),
+        ("Bên mời thầu / Chủ đầu tư", tbmt.get("chuDauTu")),
+        ("Quy trình áp dụng", tbmt.get("quyTrinhApDung")),
+        ("Lĩnh vực", tbmt.get("linhVuc")),
+        ("Hình thức lựa chọn nhà thầu", tbmt.get("hinhThucLuaChonNhaThau")),
+        ("Phương thức lựa chọn nhà thầu", tbmt.get("phuongThucLuaChonNhaThau")),
+        ("Loại hợp đồng", tbmt.get("loaiHopDong")),
+        ("Thời gian thực hiện gói thầu", tbmt.get("thoiGianThucHienGoiThau")),
+        ("Giá gói thầu", tbmt.get("giaGoiThau")),
+        ("Dự toán mua sắm", tbmt.get("duToanMuaSam")),
+        ("Số tiền bảo đảm dự thầu", tbmt.get("soTienBaoDamDuThau")),
+        ("Hiệu lực hồ sơ dự thầu", tbmt.get("hieuLucHoSoDuThau")),
+        ("Thời điểm đóng thầu", tbmt.get("thoiDiemDongThau")),
+        ("Thời điểm mở thầu", tbmt.get("thoiDiemMoThau")),
+        ("Ngày đăng tải gốc", tbmt.get("ngayDangTaiGoc")),
+        ("Thời gian sửa TBMT", tbmt.get("thoiGianSuaTBMT")),
+        ("Trạng thái TBMT", tbmt.get("trangThaiTBMT")),
+        ("Người trúng thầu", tbmt.get("nguoiTrungThau")),
+        ("Giá trúng thầu", tbmt.get("giaTrungThau")),
+    ]
+
+    lines = [
+        f"- {label}: {str(val).strip()}"
+        for label, val in fields
+        if val is not None and str(val).strip()
+    ]
+
+    if not lines:
+        return ""
+
+    return (
+        "--- THÔNG TIN TRA CỨU TỪ HỆ THỐNG (DATABASE) ---\n"
+        + "\n".join(lines)
+        + "\n-------------------------------------------------"
+    )

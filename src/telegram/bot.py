@@ -22,8 +22,7 @@ from telegram.ext import (
 from src.worker.worker import (
     is_task_pending,
     add_download_task,
-    get_existing_hsmt_file,
-    get_existing_baocao_file
+    get_existing_report_folder
 )
 
 from src.database.db import (
@@ -614,7 +613,6 @@ async def send_telegram(
             except Exception as error:
                 logger.error(f"❌ Gửi Telegram thất bại {chat_id}: {error}")
 
-
 async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
@@ -644,31 +642,54 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    existing_pdf = get_existing_hsmt_file(ma_tbmt)
-    existing_docx = get_existing_baocao_file(ma_tbmt)
+    # 3. KIỂM TRA THƯ MỤC VÀ GỬI FILE NẾU ĐÃ CÓ SẴN
+    folder_path = get_existing_report_folder(ma_tbmt)
 
-    # TRƯỜNG HỢP 1: ĐÃ CÓ ĐỦ CẢ 2 FILE CACHE -> GỬI NGAY
-    if existing_pdf and existing_docx:
-        with open(existing_pdf, "rb") as f_pdf, open(existing_docx, "rb") as f_docx:
-            media_group = [
-                InputMediaDocument(
-                    media=f_pdf,
-                    filename=f"HSMT_{ma_tbmt}.pdf",
-                ),
-                InputMediaDocument(
-                    media=f_docx,
-                    filename=f"BaoCao_{ma_tbmt}.docx",
-                    caption=f"✅ HSMT & Tóm tắt cho gói <b>{ma_tbmt}</b>!",
-                    parse_mode="HTML",
-                ),
-            ]
-            await context.bot.send_media_group(chat_id=chat_id, media=media_group)
-        return
+    if folder_path and folder_path.is_dir():
+        # Lấy tất cả các file hợp lệ trong thư mục (bỏ qua file dung lượng 0 byte)
+        files = [p for p in folder_path.iterdir() if p.is_file() and p.stat().st_size > 0]
 
+        if files:
+            # Telegram giới hạn mỗi send_media_group tối đa 10 media
+            chunk_size = 10
+            for i in range(0, len(files), chunk_size):
+                chunk = files[i : i + chunk_size]
+                media_group = []
+                file_handles = []
+
+                for idx, file_p in enumerate(chunk):
+                    f = open(file_p, "rb")
+                    file_handles.append(f)
+
+                    # Gán caption vào file đầu tiên của nhóm đầu tiên
+                    caption = (
+                        f"✅ Hồ sơ gói thầu <b>{ma_tbmt}</b> ({len(files)} files)"
+                        if (i == 0 and idx == 0)
+                        else None
+                    )
+
+                    media_group.append(
+                        InputMediaDocument(
+                            media=f,
+                            filename=file_p.name,
+                            caption=caption,
+                            parse_mode="HTML",
+                        )
+                    )
+
+                try:
+                    await context.bot.send_media_group(chat_id=chat_id, media=media_group)
+                finally:
+                    # Luôn đóng file handle sau khi gửi xong
+                    for f in file_handles:
+                        f.close()
+
+            return
+
+    # 4. TRƯỜNG HỢP CHƯA CÓ FILE -> ĐƯA VÀO HÀNG ĐỢI
     already_pending = is_task_pending(item_id)
     await add_download_task(id=item_id, ma_tbmt=ma_tbmt, chat_id=chat_id)
 
-    # 4. PHẢN HỒI THÔNG BÁO CHO NGƯỜI DÙNG
     if already_pending:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -678,7 +699,7 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📥 Đã thêm yêu cầu tải HSMT & tạo báo cáo <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
+            text=f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
             parse_mode="HTML",
         )
 # ==========================================================

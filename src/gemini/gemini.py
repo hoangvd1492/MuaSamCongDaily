@@ -1,18 +1,26 @@
 from functools import lru_cache
 import os
 from pathlib import Path
+import re
 import time
+from typing import Optional
 
 from google import genai
 from google.genai import types
 
-from src.helpers import PROMPT_TEMPLATE, save_markdown_to_docx
+
+from src.helpers import sanitize_name
+
+from src.helpers import GEMINI_PROMPT_TEMPLATE, save_markdown_to_docx
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
+SUFFIXES = ("HSMT", "TCDG", "YCKT")
 
-# GIỮ NGUYÊN DANH SÁCH MODEL CỦA BẠN
+STORAGE_DIR = Path("storage")
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
 MODELS_TO_TRY = [
     'gemini-3.7-flash',
     'gemini-3.6-flash',
@@ -20,6 +28,11 @@ MODELS_TO_TRY = [
     'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite'
 ]
+
+
+def sanitize_name(name: str) -> str:
+    """Loại bỏ các ký tự không hợp lệ trên hệ thống file."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 
 @lru_cache(maxsize=1)
@@ -45,74 +58,101 @@ def _wait_for_file_processing(
         if state_name == "ACTIVE":
             return file_obj
         if state_name == "FAILED":
-            raise RuntimeError(f"[{ma_tbmt}] Google không thể xử lý file PDF (trạng thái FAILED).")
+            raise RuntimeError(f"[{ma_tbmt}] Google không thể xử lý file (trạng thái FAILED).")
 
-        logger.info(f"[{ma_tbmt}] Đang chờ Google xử lý file ({state_name})...")
+        logger.info(f"[{ma_tbmt}] Đang chờ Google xử lý file {file_name} ({state_name})...")
         time.sleep(poll_interval)
 
-    raise TimeoutError(f"[{ma_tbmt}] Quá thời gian chờ Google xử lý file PDF.")
+    raise TimeoutError(f"[{ma_tbmt}] Quá thời gian chờ Google xử lý file {file_name}.")
 
 
-def gemini_analyse(pdf_path: str | Path, docx_path: str | Path, ma_tbmt: str) -> bool:
-    pdf_path_str = str(pdf_path)
-    docx_path_str = str(docx_path)
+def gemini_analyse(ma_tbmt: str,context: str = "") -> bool:
+    """Quét các file {ma_tbmt}_HSMT, {ma_tbmt}_TCDG, {ma_tbmt}_YCKT nạp vào Gemini và xuất báo cáo DOCX."""
+    safe_tbmt = sanitize_name(str(ma_tbmt))
+    target_dir = STORAGE_DIR / safe_tbmt
 
-    if not os.path.exists(pdf_path_str):
-        logger.error(f"[{ma_tbmt}] File không tồn tại: {pdf_path_str}")
+    if not target_dir.is_dir():
+        logger.error(f"[{safe_tbmt}] Thư mục không tồn tại: {target_dir}")
         return False
 
-    uploaded_file = None
+    # 1. Tập hợp các tên file mục tiêu (không phân biệt hoa thường)
+    target_stems = {f"{safe_tbmt}_{suffix}".upper() for suffix in SUFFIXES}
+
+    # 2. Tìm tất cả các file hợp lệ trong thư mục
+    valid_source_files: list[Path] = [
+        file_path
+        for file_path in target_dir.iterdir()
+        if file_path.is_file()
+        and file_path.stat().st_size > 0
+        and file_path.stem.upper() in target_stems
+    ]
+
+    if not valid_source_files:
+        logger.error(f"[{safe_tbmt}] Không tìm thấy file nguồn hợp lệ ({', '.join(target_stems)}) trong thư mục.")
+        return False
+
+    output_docx_path = target_dir / f"{safe_tbmt}_BaoCao.docx"
+    uploaded_files: list[types.File] = []
     ai_client = get_gemini_client()
     gen_config = types.GenerateContentConfig(temperature=0.2)
 
     try:
-        # 1. Upload PDF
-        logger.info(f"[{ma_tbmt}] Đang tải file lên Gemini: {pdf_path_str}")
-        uploaded_file = ai_client.files.upload(file=pdf_path_str)
+        # 3. Tải tất cả file nguồn lên Gemini Files API và đợi index
+        for src_file in valid_source_files:
+            logger.info(f"[{safe_tbmt}] Đang tải file lên Gemini: {src_file.name}")
+            raw_upload = ai_client.files.upload(file=str(src_file))
+            
+            ready_file = _wait_for_file_processing(
+                ai_client=ai_client,
+                file_name=raw_upload.name,
+                ma_tbmt=safe_tbmt
+            )
+            uploaded_files.append(ready_file)
 
-        # Chờ xử lý file
-        uploaded_file = _wait_for_file_processing(
-            ai_client=ai_client,
-            file_name=uploaded_file.name,
-            ma_tbmt=ma_tbmt
-        )
+        # 4. Fallback qua danh sách models với toàn bộ danh sách file nguồn
+        markdown_text: Optional[str] = None
+        contents_payload: list = [*uploaded_files]
+        if context and context.strip():
+            contents_payload.append(context.strip())
+        contents_payload.append(GEMINI_PROMPT_TEMPLATE)
 
-        # 2. Fallback qua danh sách models
-        markdown_text: str | None = None
         for model_name in MODELS_TO_TRY:
             try:
-                logger.info(f"[{ma_tbmt}] Đang gọi model {model_name}...")
+                logger.info(f"[{safe_tbmt}] Đang gọi model {model_name} với {len(uploaded_files)} file nguồn...")
                 response = ai_client.models.generate_content(
                     model=model_name,
-                    contents=[uploaded_file, PROMPT_TEMPLATE],
+                    contents=contents_payload,
                     config=gen_config,
                 )
                 if response and response.text:
                     markdown_text = response.text
                     break
             except Exception as e_model:
-                logger.warning(f"[{ma_tbmt}] Model {model_name} gặp lỗi: {e_model}")
+                logger.warning(f"[{safe_tbmt}] Model {model_name} gặp lỗi: {e_model}")
                 continue
 
         if not markdown_text:
-            logger.error(f"[{ma_tbmt}] Tất cả model trong danh sách đều không trả về kết quả.")
+            logger.error(f"[{safe_tbmt}] Tất cả model trong danh sách đều không trả về kết quả.")
             return False
 
-        # 3. Xuất file DOCX trực tiếp
+        # 5. Xuất file DOCX trực tiếp vào thư mục gói thầu
         save_markdown_to_docx(
             markdown_text=markdown_text,
-            output_path=docx_path_str,
-            title=f"BÁO CÁO PHÂN TÍCH HỒ SƠ: {ma_tbmt}",
+            output_path=str(output_docx_path),
+            title=f"BÁO CÁO PHÂN TÍCH HỒ SƠ: {safe_tbmt}",
         )
+        logger.info(f"[{safe_tbmt}] Đã tạo xong báo cáo: {output_docx_path.name}")
         return True
 
     except Exception as e:
-        logger.error(f"Lỗi phân tích Gemini cho gói {ma_tbmt}: {e}", exc_info=True)
+        logger.error(f"Lỗi phân tích Gemini cho gói {safe_tbmt}: {e}", exc_info=True)
         return False
 
     finally:
-        if uploaded_file and hasattr(uploaded_file, "name"):
-            try:
-                ai_client.files.delete(name=uploaded_file.name)
-            except Exception as del_err:
-                logger.debug(f"[{ma_tbmt}] Không thể xóa file tạm trên Gemini ({uploaded_file.name}): {del_err}")
+        # 6. Dọn dẹp toàn bộ file tạm đã tải lên Google
+        for f in uploaded_files:
+            if hasattr(f, "name"):
+                try:
+                    ai_client.files.delete(name=f.name)
+                except Exception as del_err:
+                    logger.debug(f"[{safe_tbmt}] Không thể xóa file tạm trên Gemini ({f.name}): {del_err}")

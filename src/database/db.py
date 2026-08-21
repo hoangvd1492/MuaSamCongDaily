@@ -1,5 +1,6 @@
 from pathlib import Path
 import sqlite3
+from typing import Optional
 
 # Đường dẫn từ src/database/db.py -> Thư mục gốc dự án
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -269,7 +270,18 @@ def is_tbmt_valid(item_id: str, ma_tbmt: str) -> bool:
             "SELECT 1 FROM TBMT WHERE id = ? AND maTBMT = ? LIMIT 1",
             (str(item_id).strip(), str(ma_tbmt).strip()),
         )
-        return cursor.fetchone() is not None       
+        return cursor.fetchone() is not None  
+         
 
+def get_tbmt_by_id(item_id: str) -> Optional[dict]:
+    """Lấy thông tin chi tiết gói thầu theo id (Primary Key)."""
+    sql = "SELECT * FROM TBMT WHERE id = ?"
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(sql, (item_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    
+    
 if __name__ == "__main__":
     init_db()
