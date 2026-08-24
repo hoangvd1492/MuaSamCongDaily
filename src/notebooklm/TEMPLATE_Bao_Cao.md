@@ -53,11 +53,7 @@
 
 - Nêu chi tiết các giấy chứng nhận, giấy phép, hoặc chứng chỉ đăng ký hoạt động chuyên ngành trong lĩnh vực lưu trữ, chỉnh lý tài liệu, số hóa, công nghệ thông tin, an toàn thông tin... (ví dụ: Đăng ký dịch vụ lưu trữ cấp tỉnh theo Luật Lưu trữ...).
 
-### 3. Các chứng chỉ, giấy phép & năng lực pháp lý khác của công ty:
-
-- Đăng ký doanh nghiệp, giấy phép kinh doanh, chứng nhận đại lý/hãng sản xuất, giấy xác nhận năng lực, chứng nhận bảo mật, tính hợp lệ đấu thầu, v.v.
-
-### 4. Năng lực tài chính & Hợp đồng tương tự:
+### 3. Năng lực tài chính & Hợp đồng tương tự:
 
 | Tiêu chí                                   | Yêu cầu chi tiết                                             |
 | :----------------------------------------- | :----------------------------------------------------------- |

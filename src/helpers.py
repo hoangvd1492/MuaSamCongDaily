@@ -103,10 +103,7 @@ Hãy đọc, đối chiếu và tổng hợp thông tin từ TẤT CẢ các fil
 ### 2. Các chứng chỉ / chứng nhận hoạt động trong lĩnh vực lưu trữ / số hóa / CNTT:
 - Nêu chi tiết các giấy chứng nhận, giấy phép, hoặc chứng chỉ đăng ký hoạt động chuyên ngành trong lĩnh vực lưu trữ, chỉnh lý tài liệu, số hóa, công nghệ thông tin, an toàn thông tin... (ví dụ: Đăng ký dịch vụ lưu trữ cấp tỉnh theo Luật Lưu trữ 2024...).
 
-### 3. Các chứng chỉ, giấy phép & năng lực pháp lý khác của công ty:
-- Đăng ký doanh nghiệp, giấy phép kinh doanh, chứng nhận đại lý/hãng sản xuất, giấy xác nhận năng lực, chứng nhận bảo mật, tính hợp lệ đấu thầu, v.v.
-
-### 4. Năng lực tài chính & Hợp đồng tương tự:
+### 3. Năng lực tài chính & Hợp đồng tương tự:
 | Tiêu chí | Yêu cầu chi tiết |
 | :--- | :--- |
 | **Bảo đảm dự thầu** | Giá trị & thời hạn hiệu lực, hình thức bảo đảm |

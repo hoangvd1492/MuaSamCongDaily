@@ -9,6 +9,7 @@ load_dotenv()
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from src.clean_storage import clean_old_storage_folders  # Đảm bảo đúng đường dẫn import file cleaner của bạn
 from src.crawler import run_crawler
 from src.database.db import has_tbmt, init_db
 from src.logger import get_logger, setup_app_logging
@@ -29,6 +30,17 @@ async def scheduled_crawler_job():
         logger.error(f"Lỗi trong quá trình crawl định kỳ: {e}", exc_info=True)
 
 
+async def scheduled_cleanup_job():
+    """Hàm bọc gọi dọn dẹp storage định kỳ (chạy qua thread để không chặn event loop)"""
+    logger.info("🧹 Bắt đầu tiến trình dọn dẹp storage cũ...")
+    try:
+        # Đọc số ngày lưu trữ từ .env (mặc định 30 ngày)
+        days_threshold = float(os.getenv("STORAGE_CLEAN_DAYS", "30"))
+        await asyncio.to_thread(clean_old_storage_folders, days_threshold=days_threshold)
+    except Exception as e:
+        logger.error(f"Lỗi trong quá trình dọn dẹp storage: {e}", exc_info=True)
+
+
 async def init_scheduler_and_first_run(application=None):
     """Cào dữ liệu lần đầu chạy ngầm và kích hoạt Cron Scheduler."""
     try:
@@ -42,9 +54,13 @@ async def init_scheduler_and_first_run(application=None):
 
         # 2. Cấu hình và khởi động Scheduler
         schedule_cron = os.getenv("CRON_SCHEDULE", "1 12 * * *")
+        # Cron dọn storage: mặc định chạy lúc 03:00 sáng mỗi ngày
+        cleanup_cron = os.getenv("CLEANUP_CRON_SCHEDULE", "0 3 */2 * *")
         tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
         scheduler = AsyncIOScheduler()
+
+        # Job 1: Crawler định kỳ
         scheduler.add_job(
             scheduled_crawler_job,
             CronTrigger.from_crontab(schedule_cron, timezone=tz),
@@ -53,6 +69,17 @@ async def init_scheduler_and_first_run(application=None):
             id="tbmt_crawler_job",
             replace_existing=True,
         )
+
+        # Job 2: Dọn dẹp storage cũ định kỳ
+        scheduler.add_job(
+            scheduled_cleanup_job,
+            CronTrigger.from_crontab(cleanup_cron, timezone=tz),
+            misfire_grace_time=300,
+            coalesce=True,
+            id="storage_cleaner_job",
+            replace_existing=True,
+        )
+
         scheduler.start()
 
         # Lưu tham chiếu để tránh bị Garbage Collection thu hồi
@@ -60,7 +87,7 @@ async def init_scheduler_and_first_run(application=None):
             application.bot_data["scheduler"] = scheduler
 
         logger.info(
-            f"✅ Cron scheduler đã khởi động với cấu hình: '{schedule_cron}' (Asia/Ho_Chi_Minh)"
+            f"✅ Cron scheduler đã khởi động (Crawler: '{schedule_cron}', Cleaner: '{cleanup_cron}') [Asia/Ho_Chi_Minh]"
         )
     except Exception as e:
         logger.error(f"Lỗi khởi tạo Crawler/Scheduler nền: {e}", exc_info=True)

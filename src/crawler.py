@@ -1,42 +1,36 @@
-from src.database.db import get_all_tbmt
-from src.telegram.bot import send_telegram
-from src.helpers import build_detail_message
-from src.telegram.bot import send_message_to_admin
-from src.excel.excel import export_tbmt_excel
-from src.playwright.playwright import get_server_time
-from src.playwright.playwright import get_detail_khlcnt
-from src.playwright.playwright import get_detail_tbmt
-from src.playwright.playwright import get_list_tbmt
-from src.helpers import query_builder
-from src.logger import get_logger
-from src.playwright.playwright import get_recaptcha_token
 import asyncio
-
 from typing import Optional
 
-from src.drive.drive import replace_file
-
-
-# Import các hàm DB đã viết ở db.py
 from src.database.db import (
     check_db_health,
     get_all_keywords,
+    get_all_tbmt,
     get_latest_thoi_gian_sua_tbmt,
     get_tbmt_by_time_range,
     upsert_tbmt,
 )
+from src.drive.drive import replace_file
+from src.excel.excel import export_tbmt_excel
+from src.helpers import async_sleep, build_detail_message, query_builder
+from src.logger import get_logger
+from src.playwright.playwright import (
+    get_detail_khlcnt,
+    get_detail_tbmt,
+    get_list_tbmt,
+    get_recaptcha_token,
+    get_server_time,
+)
+from src.telegram.bot import send_message_to_admin, send_telegram
 
-from src.helpers import async_sleep
-
-
+# Import các hàm quản lý task download HSMT (điều chỉnh import theo đúng vị trí file của bạn)
+from src.worker.worker import add_download_task, is_task_pending
 
 logger = get_logger(__name__)
 
 
-
-
-
-async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_time: str):
+async def set_up_crawler_by_keyword(
+    keyword: str, from_time: Optional[str], to_time: str
+):
     logger.info("Đang lấy token reCAPTCHA...")
     token = await get_recaptcha_token()
     logger.info("Lấy token reCAPTCHA thành công.")
@@ -93,11 +87,13 @@ async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_t
     index = 1
     for notify_id in unique_notify_ids:
         try:
-            logger.info(f"[{index}/{len(unique_notify_ids)}] Đang xử lý notifyId={notify_id}")
+            logger.info(
+                f"[{index}/{len(unique_notify_ids)}] Đang xử lý notifyId={notify_id}"
+            )
 
             tbmt = await get_detail_tbmt(token, notify_id)
             if not tbmt or not tbmt.get("bidoNotifyContractorM"):
-                logger.warn(f"notifyId={notify_id}: API trả về null")
+                logger.warning(f"notifyId={notify_id}: API trả về null")
                 continue
 
             bido_notify = tbmt.get("bidoNotifyContractorM") or {}
@@ -109,50 +105,77 @@ async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_t
 
             if plan_id:
                 khlcnt = await get_detail_khlcnt(token, plan_id)
-                project_list = (khlcnt or {}).get("bidpPlanDetailToProjectList") or []
-                matched_project = next((item for item in project_list if item.get("id") == bid_id), None)
+                project_list = (khlcnt or {}).get(
+                    "bidpPlanDetailToProjectList"
+                ) or []
+                matched_project = next(
+                    (item for item in project_list if item.get("id") == bid_id),
+                    None,
+                )
 
-            cur_item = next((x for x in all_items if x.get("notifyId") == notify_id), {})
+            cur_item = next(
+                (x for x in all_items if x.get("notifyId") == notify_id), {}
+            )
 
             # Format thời gian thực hiện gói thầu
             contract_period = bido_notify.get("contractPeriod")
             contract_period_unit = bido_notify.get("contractPeriodUnit", "")
-            thoi_gian_thuc_hien = f"{contract_period}{contract_period_unit}" if contract_period is not None else ""
+            thoi_gian_thuc_hien = (
+                f"{contract_period}{contract_period_unit}"
+                if contract_period is not None
+                else ""
+            )
 
             # Format hiệu lực HSDT
             bid_validity_period = bido_notify.get("bidValidityPeriod")
             bid_validity_unit = bido_notify.get("bidValidityPeriodUnit", "")
-            hieu_luc_hsdt = f"{bid_validity_period}{bid_validity_unit}" if bid_validity_period is not None else ""
+            hieu_luc_hsdt = (
+                f"{bid_validity_period}{bid_validity_unit}"
+                if bid_validity_period is not None
+                else ""
+            )
 
             contractor_names = cur_item.get("contractorName") or []
             bid_winning_prices = cur_item.get("bidWinningPrice") or []
 
-            upsert_tbmt({
-                "id": notify_id,
-                "planId": plan_id,
-                "maTBMT": bido_notify.get("notifyNo", ""),
-                "ngayDangTaiGoc": bido_notify.get("originalPublicDate"),
-                "thoiGianSuaTBMT": bido_notify.get("publicDate"),
-                "maKHLCNT": bido_notify.get("planNo", ""),
-                "tenDuToanMuaSam": bido_notify.get("projectName", ""),
-                "quyTrinhApDung": bido_notify.get("processApply", ""),
-                "tenGoiThau": bido_notify.get("bidName", ""),
-                "chuDauTu": bido_notify.get("investorName", ""),
-                "hinhThucLuaChonNhaThau": bido_notify.get("bidForm", ""),
-                "linhVuc": bido_notify.get("investField", ""),
-                "loaiHopDong": bido_notify.get("contractType", ""),
-                "thoiGianThucHienGoiThau": thoi_gian_thuc_hien,
-                "thoiDiemDongThau": bido_notify.get("bidCloseDate"),
-                "thoiDiemMoThau": bido_notify.get("bidOpenDate"),
-                "hieuLucHoSoDuThau": hieu_luc_hsdt,
-                "soTienBaoDamDuThau": bido_notify.get("guaranteeValue", ""),
-                "duToanMuaSam": (khlcnt or {}).get("bidPoBidpPlanProjectDetailView", {}).get("investTotal", "") if khlcnt else "",
-                "giaGoiThau": (matched_project or {}).get("bidPrice", 0) if matched_project else 0,
-                "trangThaiTBMT": cur_item.get("statusForNotify", ""),
-                "nguoiTrungThau": contractor_names[0] if contractor_names else "",
-                "giaTrungThau": bid_winning_prices[0] if bid_winning_prices else "",
-                "phuongThucLuaChonNhaThau": bido_notify.get("bidMode", ""),
-            })
+            upsert_tbmt(
+                {
+                    "id": notify_id,
+                    "planId": plan_id,
+                    "maTBMT": bido_notify.get("notifyNo", ""),
+                    "ngayDangTaiGoc": bido_notify.get("originalPublicDate"),
+                    "thoiGianSuaTBMT": bido_notify.get("publicDate"),
+                    "maKHLCNT": bido_notify.get("planNo", ""),
+                    "tenDuToanMuaSam": bido_notify.get("projectName", ""),
+                    "quyTrinhApDung": bido_notify.get("processApply", ""),
+                    "tenGoiThau": bido_notify.get("bidName", ""),
+                    "chuDauTu": bido_notify.get("investorName", ""),
+                    "hinhThucLuaChonNhaThau": bido_notify.get("bidForm", ""),
+                    "linhVuc": bido_notify.get("investField", ""),
+                    "loaiHopDong": bido_notify.get("contractType", ""),
+                    "thoiGianThucHienGoiThau": thoi_gian_thuc_hien,
+                    "thoiDiemDongThau": bido_notify.get("bidCloseDate"),
+                    "thoiDiemMoThau": bido_notify.get("bidOpenDate"),
+                    "hieuLucHoSoDuThau": hieu_luc_hsdt,
+                    "soTienBaoDamDuThau": bido_notify.get("guaranteeValue", ""),
+                    "duToanMuaSam": (khlcnt or {})
+                    .get("bidPoBidpPlanProjectDetailView", {})
+                    .get("investTotal", "")
+                    if khlcnt
+                    else "",
+                    "giaGoiThau": (matched_project or {}).get("bidPrice", 0)
+                    if matched_project
+                    else 0,
+                    "trangThaiTBMT": cur_item.get("statusForNotify", ""),
+                    "nguoiTrungThau": contractor_names[0]
+                    if contractor_names
+                    else "",
+                    "giaTrungThau": bid_winning_prices[0]
+                    if bid_winning_prices
+                    else "",
+                    "phuongThucLuaChonNhaThau": bido_notify.get("bidMode", ""),
+                }
+            )
 
             logger.info(f"✓ Hoàn thành notifyId={notify_id}")
         except Exception as err:
@@ -160,6 +183,7 @@ async def set_up_crawler_by_keyword(keyword: str, from_time: Optional[str], to_t
         finally:
             index += 1
             await async_sleep()
+
 
 # Khởi tạo khóa dùng chung cho toàn bộ tiến trình cào
 crawler_lock = asyncio.Lock()
@@ -169,11 +193,14 @@ async def run_crawler(trigger_source: str = "Scheduler") -> bool:
     """Hàm chạy cào dữ liệu được bảo vệ bởi asyncio.Lock().
 
     :param trigger_source: Nguồn kích hoạt ('Scheduler' hoặc 'Admin Command')
-    :return: True nếu cào thành công/đã thực hiện, False nếu bị bỏ qua do đang bận.
+    :return: True nếu cào thành công/đã thực hiện, False nếu bị bỏ qua do đang
+    bận.
     """
     # Kiểm tra xem có tiến trình nào đang chạy không
     if crawler_lock.locked():
-        logger.info(f"⏳ [{trigger_source}] Tiến trình Crawler đang bận chạy, bỏ qua lần gọi này.")
+        logger.info(
+            f"⏳ [{trigger_source}] Tiến trình Crawler đang bận chạy, bỏ qua lần gọi này."
+        )
         return False
 
     # Khóa tiến trình lại cho đến khi hoàn thành xong khối 'async with'
@@ -224,45 +251,60 @@ async def run_crawler(trigger_source: str = "Scheduler") -> bool:
             if total_today > 0:
                 logger.info("Đang ghi đè file lên Google Drive...")
                 drive_result = replace_file(file_path)
-            
-                # Lấy link xem trực tiếp nếu upload thành công, nếu lỗi/không có ID thì drive_link = None
-                drive_link = drive_result.get("webViewLink") if drive_result else None
+
+                drive_link = (
+                    drive_result.get("webViewLink") if drive_result else None
+                )
 
                 logger.info("Đang gửi file báo cáo qua Telegram...")
-                caption = f"Hôm nay có {total_today} thông báo mời thầu mới!"
+                caption = (
+                    f"Hôm nay có {total_today} thông báo mời thầu mới!"
+                )
                 if drive_link:
                     caption += f"\n\n📁 Google Drive:\n{drive_link}"
 
                 # 1. Gửi file Excel kèm caption (và link Drive nếu có)
                 await send_telegram(text=caption, file_path=file_path)
 
-                # 2. Gửi chi tiết từng gói thầu
+                # 2. Gửi chi tiết từng gói thầu & TỰ ĐỘNG THÊM VÀO TASK TẢI HSMT
                 for item in news:
                     message, detail_url = build_detail_message(item)
 
-                    # Lấy cả id và mã TBMT từ item (điều chỉnh key theo dữ liệu thực tế của bạn)
                     item_id = item.get("id")
                     ma_tbmt = item.get("maTBMT") or item.get("ma_tbmt")
+
+                    # Tự động đẩy gói thầu vào hàng đợi tải file HSMT
+                    if item_id and ma_tbmt:
+                        if not is_task_pending(item_id):
+                            await add_download_task(
+                                id=item_id,
+                                ma_tbmt=ma_tbmt,
+                                chat_id=None,  # Để None nếu worker chỉ lưu file về server, hoặc truyền CHAT_ID nếu muốn tự gửi vào nhóm
+                            )
+                            logger.info(
+                                f"📥 Đã tự động thêm task tải HSMT: {ma_tbmt} (ID: {item_id})"
+                            )
 
                     buttons = []
 
                     # Nút 1: Link xem chi tiết
                     if detail_url:
-                        buttons.append({"text": "🔗 Xem chi tiết TBMT", "url": detail_url})
+                        buttons.append(
+                            {"text": "🔗 Xem chi tiết TBMT", "url": detail_url}
+                        )
 
-                    # Nút 2: Nút gọi sự kiện tải HSMT (Truyền id:ma_tbmt)
+                    # Nút 2: Nút thủ công dự phòng để tải/gửi lại
                     if item_id and ma_tbmt:
-                        buttons.append({
-                            "text": "📥 Tải HSMT", 
-                            "callback_data": f"download_hsmt:{item_id}:{ma_tbmt}"
-                        })
+                        buttons.append(
+                            {
+                                "text": "📥 Phân tích HSMT",
+                                "callback_data": f"download_hsmt:{item_id}:{ma_tbmt}",
+                            }
+                        )
 
                     reply_markup = None
                     if buttons:
-                        # Đặt 2 nút cùng 1 hàng: [[nút 1, nút 2]]
-                        reply_markup = {
-                            "inline_keyboard": [buttons]
-                        }
+                        reply_markup = {"inline_keyboard": [buttons]}
 
                     await send_telegram(text=message, reply_markup=reply_markup)
 
