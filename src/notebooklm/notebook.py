@@ -80,7 +80,7 @@ async def notebooklm_analyse(ma_tbmt: str,context: str = "") -> bool:
                 source_ids = []
                 for src_file in sources_to_upload:
                     mime_type,_ = mimetypes.guess_type(src_file)
-                    logger.info(f"[{safe_tbmt}] Tải file lên NotebookLM: {src_file.name}")
+                    logger.info(f"[{safe_tbmt}] Tải file lên NotebookLM: {src_file.name}/{mime_type}")
                     source = await client.sources.add_file(notebook_id, str(src_file),mime_type=mime_type)
                     source_ids.append(source.id)
 
