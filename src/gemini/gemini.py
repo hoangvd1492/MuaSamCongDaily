@@ -7,7 +7,6 @@ from typing import Optional
 
 from google import genai
 from google.genai import types
-import mimetypes
 
 
 from src.helpers import sanitize_name
@@ -100,9 +99,8 @@ def gemini_analyse(ma_tbmt: str,context: str = "") -> bool:
     try:
         # 3. Tải tất cả file nguồn lên Gemini Files API và đợi index
         for src_file in valid_source_files:
-            mime_type,_ = mimetypes.guess_type(src_file)
             logger.info(f"[{safe_tbmt}] Đang tải file lên Gemini: {src_file.name}")
-            raw_upload = ai_client.files.upload(file=str(src_file),config={"mime_type": mime_type})
+            raw_upload = ai_client.files.upload(file=str(src_file))
             
             ready_file = _wait_for_file_processing(
                 ai_client=ai_client,
