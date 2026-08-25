@@ -102,7 +102,7 @@ def gemini_analyse(ma_tbmt: str,context: str = "") -> bool:
         for src_file in valid_source_files:
             mime_type,_ = mimetypes.guess_type(src_file)
             logger.info(f"[{safe_tbmt}] Đang tải file lên Gemini: {src_file.name}")
-            raw_upload = ai_client.files.upload(file=str(src_file),mime_type=mime_type)
+            raw_upload = ai_client.files.upload(file=str(src_file),config={"mime_type": mime_type})
             
             ready_file = _wait_for_file_processing(
                 ai_client=ai_client,
