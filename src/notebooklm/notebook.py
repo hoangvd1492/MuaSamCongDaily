@@ -6,6 +6,7 @@ from notebooklm import NotebookLMClient
 from src.helpers import  save_markdown_to_docx
 from src.logger import get_logger
 from src.helpers import sanitize_name
+import mimetypes
 
 logger = get_logger(__name__)
 
@@ -78,8 +79,9 @@ async def notebooklm_analyse(ma_tbmt: str,context: str = "") -> bool:
                 # 5. Upload các file nguồn (HSMT + Template)
                 source_ids = []
                 for src_file in sources_to_upload:
+                    mime_type,_ = mimetypes.guess_type(src_file)
                     logger.info(f"[{safe_tbmt}] Tải file lên NotebookLM: {src_file.name}")
-                    source = await client.sources.add_file(notebook_id, str(src_file))
+                    source = await client.sources.add_file(notebook_id, str(src_file),mime_type=mime_type)
                     source_ids.append(source.id)
 
                 # Chờ xử lý index toàn bộ nguồn
