@@ -7,6 +7,8 @@ from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
+import puremagic
+from pathlib import Path
 
 
 import asyncio
@@ -830,3 +832,21 @@ def build_tbmt_context(tbmt: Optional[dict]) -> str:
         + "\n".join(lines)
         + "\n-------------------------------------------------"
     )
+    
+    
+def get_file_mime_type(file_path: str) -> str:
+    """
+    Đọc MIME type chuẩn từ nội dung file.
+    Có fallback tự động dựa vào đuôi file nếu gặp file dạng text đặc thù.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return "application/octet-stream"
+
+    try:
+        # Cách 1: Đọc magic bytes thực tế trong file
+        mime = puremagic.from_file(str(path), mime=True)
+        if mime:
+            return mime
+    except Exception:
+        pass

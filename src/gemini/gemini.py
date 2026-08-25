@@ -11,7 +11,7 @@ from google.genai import types
 
 from src.helpers import sanitize_name
 
-from src.helpers import GEMINI_PROMPT_TEMPLATE, save_markdown_to_docx
+from src.helpers import GEMINI_PROMPT_TEMPLATE, save_markdown_to_docx,get_file_mime_type
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -99,8 +99,9 @@ def gemini_analyse(ma_tbmt: str,context: str = "") -> bool:
     try:
         # 3. Tải tất cả file nguồn lên Gemini Files API và đợi index
         for src_file in valid_source_files:
-            logger.info(f"[{safe_tbmt}] Đang tải file lên Gemini: {src_file.name}")
-            raw_upload = ai_client.files.upload(file=str(src_file))
+            mime_type = get_file_mime_type(str(src_file))
+            logger.info(f"[{safe_tbmt}] Đang tải file lên Gemini: {src_file.name}/{mime_type}")
+            raw_upload = ai_client.files.upload(file=str(src_file),config=dict(mime_type=mime_type))
             
             ready_file = _wait_for_file_processing(
                 ai_client=ai_client,
