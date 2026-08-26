@@ -35,3 +35,5 @@ python-docx==1.2.0
 google-genai
 puremagic
 
+cachetools
+

@@ -7,6 +7,9 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.curl import CurlMime
 
 import io
+from cachetools import TTLCache
+from telegram.request import HTTPXRequest
+import time
 
 from telegram import InputMediaDocument, Update
 from telegram.error import TelegramError
@@ -39,6 +42,8 @@ from src.logger import get_logger
 
 
 logger = get_logger("APP.BOT")
+
+download_cooldown_cache = TTLCache(maxsize=5000, ttl=7)
 
 
 # ==========================================================
@@ -616,24 +621,42 @@ async def send_telegram(
 async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # 1. Tắt hiệu ứng quay tròn trên nút bấm
-    try:
-        await query.answer()
-    except TelegramError:
-        pass
-
     callback_data = query.data
     if not callback_data or not callback_data.startswith("download_hsmt:"):
         return
 
-    # 2. Tách dữ liệu: "download_hsmt:id:ma_tbmt"
+    # Tách dữ liệu: "download_hsmt:id:ma_tbmt"
     parts = callback_data.split(":")
     if len(parts) != 3:
         return
 
     _, item_id, ma_tbmt = parts
     chat_id = query.message.chat_id
+    user_id = query.from_user.id
 
+    # 1. KIỂM TRA CHỐNG SPAM BẰNG CACHETOOLS
+    lock_key = f"{user_id}:{ma_tbmt}"
+    if lock_key in download_cooldown_cache:
+        # Nếu đang trong thời gian cooldown (7s), cảnh báo toast nhẹ và dừng xử lý
+        try:
+            await query.answer(
+                text="⚠️ Bạn thao tác quá nhanh, vui lòng đợi vài giây!",
+                show_alert=False,
+            )
+        except TelegramError:
+            pass
+        return
+
+    # Lưu key vào cache để kích hoạt cooldown
+    download_cooldown_cache[lock_key] = time.time()
+
+    # Tắt hiệu ứng quay tròn trên nút bấm
+    try:
+        await query.answer()
+    except TelegramError:
+        pass
+
+    # 2. KIỂM TRA TÍNH HỢP LỆ
     if not is_tbmt_valid(item_id=item_id, ma_tbmt=ma_tbmt):
         await context.bot.send_message(
             chat_id=chat_id,
@@ -646,11 +669,11 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     folder_path = get_existing_report_folder(ma_tbmt)
 
     if folder_path and folder_path.is_dir():
-        # Lấy tất cả các file hợp lệ trong thư mục (bỏ qua file dung lượng 0 byte)
-        files = [p for p in folder_path.iterdir() if p.is_file() and p.stat().st_size > 0]
+        files = [
+            p for p in folder_path.iterdir() if p.is_file() and p.stat().st_size > 0
+        ]
 
         if files:
-            # Telegram giới hạn mỗi send_media_group tối đa 10 media
             chunk_size = 10
             for i in range(0, len(files), chunk_size):
                 chunk = files[i : i + chunk_size]
@@ -661,10 +684,12 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
                     f = open(file_p, "rb")
                     file_handles.append(f)
 
-                    # Gán caption vào file đầu tiên của nhóm đầu tiên
+                    # Kiểm tra nếu là file cuối cùng của toàn bộ danh sách
+                    is_last_file = (i + idx == len(files) - 1)
+
                     caption = (
                         f"✅ Hồ sơ gói thầu <b>{ma_tbmt}</b> ({len(files)} files)"
-                        if (i == 0 and idx == 0)
+                        if is_last_file
                         else None
                     )
 
@@ -678,9 +703,10 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
                     )
 
                 try:
-                    await context.bot.send_media_group(chat_id=chat_id, media=media_group)
+                    await context.bot.send_media_group(
+                        chat_id=chat_id, media=media_group
+                    )
                 finally:
-                    # Luôn đóng file handle sau khi gửi xong
                     for f in file_handles:
                         f.close()
 
@@ -688,7 +714,6 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 4. TRƯỜNG HỢP CHƯA CÓ FILE -> ĐƯA VÀO HÀNG ĐỢI
     already_pending = is_task_pending(item_id)
-    await add_download_task(id=item_id, ma_tbmt=ma_tbmt, chat_id=chat_id)
 
     if already_pending:
         await context.bot.send_message(
@@ -697,6 +722,8 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="HTML",
         )
     else:
+        # Chỉ tạo task mới khi gói này chưa có trong hàng đợi
+        await add_download_task(id=item_id, ma_tbmt=ma_tbmt, chat_id=chat_id)
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"📥 Đã thêm yêu cầu tải HSMT <b>{ma_tbmt}</b> vào hàng đợi xử lý.",
@@ -710,6 +737,13 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
 def setup_bot() -> Application:
 
     bot_token = os.getenv("BOT_TOKEN")
+    
+    request = HTTPXRequest(
+    connect_timeout=30.0,
+    read_timeout=120.0,
+    write_timeout=120.0,
+    pool_timeout=30.0,
+    )
 
     if not bot_token:
         raise ValueError(
@@ -719,6 +753,7 @@ def setup_bot() -> Application:
     app = (
         ApplicationBuilder()
         .token(bot_token)
+        .request(request)
         .build()
     )
 
