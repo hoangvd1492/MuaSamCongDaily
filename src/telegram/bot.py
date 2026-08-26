@@ -43,7 +43,8 @@ from src.database.db import (
     remove_subscriber,
     upsert_subscriber,
     is_tbmt_valid,
-    get_tbmt_by_time_range
+    get_tbmt_by_time_range,
+    get_tbmt_by_maTBMT
 )
 from src.logger import get_logger
 
@@ -207,6 +208,7 @@ async def help_cmd(
         "• `/start` : Lấy Chat ID của bạn\n"
         "• `/help` : Hiển thị hướng dẫn\n"
         "• `/moinhat` : Lấy lại thông tin gói thầu lần quét dữ liệu gần nhất\n"
+        "• `/goithau maHSMT` : Tìm lại thông tin theo mã HSMT\n"
     )
 
     if user_is_admin:
@@ -309,6 +311,77 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         return False
+
+
+async def get_one(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Lấy chat_id của người gửi
+    to = update.effective_chat.id if update and update.effective_chat else None
+
+    try:
+        # 1. Kiểm tra tham số người dùng nhập vào (ví dụ: /get_one IB2400012345)
+        if not context.args or len(context.args) == 0:
+            await send_telegram(
+                text="⚠️ Vui lòng nhập mã TBMT cần tra cứu.\n\n<i>Cú pháp:</i> <code>/get_one &lt;mã_TBMT&gt;</code>",
+                to=to,
+            )
+            return
+
+        ma_tbmt_input = context.args[0].strip()
+
+        # 2. Truy vấn dữ liệu từ database bằng hàm get_tbmt_by_maTBMT
+        item = get_tbmt_by_maTBMT(ma_tbmt_input)
+
+        if not item:
+            await send_telegram(
+                text=f"❌ Không tìm thấy thông tin cho gói thầu <b>{ma_tbmt_input}</b> trong hệ thống!",
+                to=to,
+            )
+            return
+
+        # 3. Tạo nội dung tin nhắn và các nút bấm tương tự get_news
+        message, detail_url = build_detail_message(item)
+
+        item_id = item.get("id")
+        ma_tbmt = item.get("maTBMT") or item.get("ma_tbmt")
+
+        buttons = []
+
+        # Nút 1: Link xem chi tiết
+        if detail_url:
+            buttons.append(
+                {"text": " Xem chi tiết TBMT", "url": detail_url}
+            )
+
+        # Nút 2: Nút thủ công tải/phân tích HSMT
+        if item_id and ma_tbmt:
+            buttons.append(
+                {
+                    "text": " Phân tích HSMT",
+                    "callback_data": f"download_hsmt:{item_id}:{ma_tbmt}",
+                }
+            )
+
+        reply_markup = None
+        if buttons:
+            reply_markup = {"inline_keyboard": [buttons]}
+
+        # 4. Gửi kết quả về Telegram
+        await send_telegram(
+            text=message,
+            reply_markup=reply_markup,
+            to=to,
+        )
+        return True
+
+    except Exception as e:
+        error_msg = f"❌ Đã xảy ra lỗi khi tra cứu gói thầu: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        try:
+            await send_telegram(text=error_msg, to=to)
+        except Exception:
+            pass
+        return False
+
 # ==========================================================
 # USER MANAGEMENT
 # ==========================================================
@@ -737,6 +810,7 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     parts = callback_data.split(":")
     if len(parts) != 3:
         return
+    
 
     _, item_id, ma_tbmt = parts
     chat_id = query.message.chat_id
@@ -880,6 +954,10 @@ def setup_bot() -> Application:
     app.add_handler(
             CommandHandler("moinhat", get_news)
         )
+    
+    app.add_handler(
+                CommandHandler("goithau", get_one)
+            )
 
     # --------------------------------------------------
     # User Management

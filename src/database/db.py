@@ -282,6 +282,20 @@ def get_tbmt_by_id(item_id: str) -> Optional[dict]:
         row = cursor.fetchone()
         return dict(row) if row else None
     
+def get_tbmt_by_maTBMT(maTBMT: str) -> Optional[dict]:
+    """Lấy thông tin chi tiết gói thầu mới nhất theo mã TBMT."""
+    sql = """
+        SELECT * FROM TBMT 
+        WHERE maTBMT = ? 
+        ORDER BY COALESCE(thoiGianSuaTBMT, ngayDangTaiGoc) DESC 
+        LIMIT 1
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(sql, (maTBMT,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    
     
 if __name__ == "__main__":
     init_db()
