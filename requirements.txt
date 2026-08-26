@@ -36,4 +36,5 @@ google-genai
 puremagic
 
 cachetools
+croniter
 

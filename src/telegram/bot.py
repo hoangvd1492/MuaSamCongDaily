@@ -6,6 +6,11 @@ import asyncio
 from curl_cffi.requests import AsyncSession
 from curl_cffi.curl import CurlMime
 
+from zoneinfo import ZoneInfo  # Python 3.9+
+from croniter import croniter
+from datetime import datetime
+import traceback
+
 import io
 from cachetools import TTLCache
 from telegram.request import HTTPXRequest
@@ -22,6 +27,7 @@ from telegram.ext import (
 )
 
 
+
 from src.worker.worker import (
     is_task_pending,
     add_download_task,
@@ -36,9 +42,14 @@ from src.database.db import (
     remove_keyword,
     remove_subscriber,
     upsert_subscriber,
-    is_tbmt_valid
+    is_tbmt_valid,
+    get_tbmt_by_time_range
 )
 from src.logger import get_logger
+
+from src.playwright.playwright import get_server_time
+
+from src.helpers import build_detail_message
 
 
 logger = get_logger("APP.BOT")
@@ -195,6 +206,7 @@ async def help_cmd(
         "👤 **Lệnh chung:**\n"
         "• `/start` : Lấy Chat ID của bạn\n"
         "• `/help` : Hiển thị hướng dẫn\n"
+        "• `/moinhat` : Lấy lại thông tin gói thầu lần quét dữ liệu gần nhất\n"
     )
 
     if user_is_admin:
@@ -213,7 +225,90 @@ async def help_cmd(
         help_text,
         parse_mode="Markdown",
     )
+    
+    
+async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Lấy chat_id của người/nhóm vừa gửi lệnh
+    to = update.effective_chat.id if update and update.effective_chat else None
 
+    try:
+        # 1. Tính toán mốc thời gian crawl gần nhất
+        schedule_cron = os.getenv("CRON_SCHEDULE", "1 12 * * *")
+        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+        now = datetime.now(tz)
+
+        iter_cron = croniter(schedule_cron, now)
+
+        # Lần 1: Lấy mốc cào gần nhất trong quá khứ (to_time)
+        last_run: datetime = iter_cron.get_prev(datetime)
+        to_time = last_run.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Lần 2: Lùi tiếp 1 chu kỳ để lấy mốc cào thứ 2 trước đó (from_time)
+        prev_run: datetime = iter_cron.get_prev(datetime)
+        from_time = prev_run.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # 2. Lấy dữ liệu bài viết/gói thầu mới
+        news = get_tbmt_by_time_range(from_time, to_time)
+        total_today = len(news) if news else 0
+        logger.info(f"Số lượng thông báo mời thầu mới: {total_today}")
+
+        # Tin đầu tiên: Thông báo tổng số lượng mời thầu mới
+        first_message = f"Hôm nay có {total_today} thông báo mời thầu mới!"
+        await send_telegram(text=first_message, to=to)
+
+        # 3. Gửi chi tiết từng gói thầu nếu có dữ liệu
+        if total_today > 0:
+            for item in news:
+                try:
+                    message, detail_url = build_detail_message(item)
+
+                    item_id = item.get("id")
+                    ma_tbmt = item.get("maTBMT") or item.get("ma_tbmt")
+
+                    buttons = []
+
+                    # Nút 1: Link xem chi tiết
+                    if detail_url:
+                        buttons.append(
+                            {"text": " Xem chi tiết TBMT", "url": detail_url}
+                        )
+
+                    # Nút 2: Nút thủ công dự phòng để tải/gửi lại
+                    if item_id and ma_tbmt:
+                        buttons.append(
+                            {
+                                "text": " Phân tích HSMT",
+                                "callback_data": f"download_hsmt:{item_id}:{ma_tbmt}",
+                            }
+                        )
+
+                    reply_markup = None
+                    if buttons:
+                        reply_markup = {"inline_keyboard": [buttons]}
+
+                    await send_telegram(
+                        text=message,
+                        reply_markup=reply_markup,
+                        to=to,
+                    )
+
+                except Exception as item_err:
+                    logger.error(
+                        f"Lỗi khi xử lý/gửi gói thầu {item.get('maTBMT')}: {item_err}"
+                    )
+                    continue
+
+            logger.info(" Gửi báo cáo Telegram thành công!")
+        return True
+
+    except Exception as e:
+        error_msg = f"❌ Đã xảy ra lỗi trong quá trình lấy tin mới: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        try:
+            await send_telegram(text=error_msg, to=to)
+        except Exception:
+            pass
+        return False
 # ==========================================================
 # USER MANAGEMENT
 # ==========================================================
@@ -562,22 +657,30 @@ async def send_telegram(
     text: str = "",
     file_path: str | Path | None = None,
     reply_markup: dict | None = None,
+    to: str | int | list[str | int] | None = None,
 ):
-    """Gửi tin nhắn văn bản hoặc file kèm inline button tới tất cả subscribers."""
+    """Gửi tin nhắn văn bản hoặc file kèm inline button tới 'to' hoặc tất cả subscribers."""
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
         raise ValueError("Chưa thiết lập BOT_TOKEN trong file .env!")
 
-    subscribers = get_all_subscribers()
-    if not subscribers:
-        logger.warning("⚠️ Không có subscriber nào trong hệ thống!")
-        return
+    # Xác định danh sách chat_id nhận tin
+    if to is not None:
+        if isinstance(to, list):
+            target_ids = [str(chat_id) for chat_id in to]
+        else:
+            target_ids = [str(to)]
+    else:
+        subscribers = get_all_subscribers()
+        if not subscribers:
+            logger.warning("⚠️ Không có subscriber nào trong hệ thống!")
+            return
+        target_ids = [str(sub["chat_id"]) for sub in subscribers]
 
     base_url = f"https://api.telegram.org/bot{bot_token}"
 
     async with AsyncSession(impersonate="chrome") as session:
-        for sub in subscribers:
-            chat_id = str(sub["chat_id"])
+        for chat_id in target_ids:
             try:
                 if file_path and os.path.exists(file_path):
                     url = f"{base_url}/sendDocument"
@@ -589,7 +692,10 @@ async def send_telegram(
                         mp.addpart(name="caption", data=text)
                         mp.addpart(name="parse_mode", data="HTML")
                     if reply_markup:
-                        mp.addpart(name="reply_markup", data=json.dumps(reply_markup))
+                        mp.addpart(
+                            name="reply_markup",
+                            data=json.dumps(reply_markup),
+                        )
                     mp.addpart(
                         name="document",
                         filename=path_obj.name,
@@ -607,7 +713,9 @@ async def send_telegram(
                     if reply_markup:
                         payload["reply_markup"] = reply_markup
 
-                    response = await session.post(url, json=payload, timeout=10)
+                    response = await session.post(
+                        url, json=payload, timeout=10
+                    )
 
                 result = response.json()
                 if not result.get("ok"):
@@ -768,6 +876,10 @@ def setup_bot() -> Application:
     app.add_handler(
         CommandHandler("help", help_cmd)
     )
+    
+    app.add_handler(
+            CommandHandler("moinhat", get_news)
+        )
 
     # --------------------------------------------------
     # User Management
