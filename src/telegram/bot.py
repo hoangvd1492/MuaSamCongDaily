@@ -811,6 +811,7 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(parts) != 3:
         return
     
+    
 
     _, item_id, ma_tbmt = parts
     chat_id = query.message.chat_id
@@ -849,6 +850,7 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 3. KIỂM TRA THƯ MỤC VÀ GỬI FILE NẾU ĐÃ CÓ SẴN
     folder_path = get_existing_report_folder(ma_tbmt)
+
 
     if folder_path and folder_path.is_dir():
         files = [
@@ -897,7 +899,9 @@ async def handle_download_hsmt(update: Update, context: ContextTypes.DEFAULT_TYP
     # 4. TRƯỜNG HỢP CHƯA CÓ FILE -> ĐƯA VÀO HÀNG ĐỢI
     already_pending = is_task_pending(item_id)
 
+
     if already_pending:
+        await add_download_task(id=item_id, ma_tbmt=ma_tbmt, chat_id=chat_id)
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"⏳ Gói <b>{ma_tbmt}</b> đang trong hàng đợi. Bot sẽ gửi file cho bạn ngay khi hoàn tất!",
